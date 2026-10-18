@@ -39,9 +39,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($error === '') {
       try {
         $pdo = require_db();
+        // Isi semua kolom public.users secara eksplisit agar tidak bergantung
+        // pada DEFAULT di database yang mungkin belum dikonfigurasi.
         $stmt = $pdo->prepare(
-          'INSERT INTO public.users (nim_nip, name, email, password_hash, role, github_username) '
-          . 'VALUES (:nim_nip, :name, :email, :hash, :role, :github_username) RETURNING id::text'
+          'INSERT INTO public.users '
+          . '(id, nim_nip, name, email, password_hash, role, github_username, created_at, updated_at) '
+          . 'VALUES (gen_random_uuid(), :nim_nip, :name, :email, :hash, :role, :github_username, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) '
+          . 'RETURNING id::text'
         );
         $stmt->execute([
           'nim_nip' => $nimNip,
@@ -89,8 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <section class="auth-story">
       <div class="story-chip"><i></i> YOUR TEAM, IN BETTER SYNC</div>
       <h1>Mulai dari tim.<br><span>Tumbuh bersama.</span></h1>
-      <p>Buat ruang kerja kolaboratif, kelola tugas, dan bangun riwayat kontribusi yang bisa
-        dipertanggungjawabkan.</p>
+      <p>Buat ruang kerja kolaboratif, kelola tugas, dan bangun riwayat kontribusi yang bisa dipertanggungjawabkan.</p>
     </section>
     <section class="auth-panel">
       <div class="auth-card">
@@ -115,19 +118,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           <label for="role">Daftar sebagai</label>
           <select id="role" name="role" required>
             <option value="mahasiswa" <?= $selectedRole === 'mahasiswa' ? 'selected' : '' ?>>Mahasiswa</option>
-            <option value="dosen" <?= $selectedRole === 'dosen' ? 'selected' : '' ?>>Dosen (memerlukan kode
-              aktivasi)</option>
+            <option value="dosen" <?= $selectedRole === 'dosen' ? 'selected' : '' ?>>Dosen (memerlukan kode aktivasi)
+            </option>
           </select>
-          <div id="dosen-code-wrap" <?= $selectedRole === 'dosen' ? '' : 'hidden' ?>><label for="dosen_code">Kode
-              aktivasi dosen</label><input id="dosen_code" type="password" name="dosen_code" autocomplete="off"
-              placeholder="Kode dari admin"><small class="field-help">Dosen perlu kode
-              dari administrator. Pilihan peran tidak langsung memberikan akses dosen.</small></div>
+          <div id="dosen-code-wrap" <?= $selectedRole === 'dosen' ? '' : 'hidden' ?>><label for="dosen_code">Kode aktivasi
+              dosen</label><input id="dosen_code" type="password" name="dosen_code" autocomplete="off"
+              placeholder="Kode dari admin"><small class="field-help">Dosen perlu kode dari administrator. Pilihan peran
+              tidak langsung memberikan akses dosen.</small></div>
           <label for="password">Kata sandi</label><input id="password" type="password" name="password" minlength="8"
             placeholder="Minimal 8 karakter" required autocomplete="new-password">
           <button class="btn primary auth-submit" type="submit">Buat akun <span>→</span></button>
         </form>
-        <div class="auth-note">Akun dosen memerlukan kode aktivasi yang disimpan aman pada konfigurasi server.
-        </div>
+        <div class="auth-note">Akun dosen memerlukan kode aktivasi yang disimpan aman pada konfigurasi server.</div>
         <div class="auth-note">Sudah punya akun? <a href="login.php">Masuk di sini</a></div>
       </div>
     </section>
