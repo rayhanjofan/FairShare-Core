@@ -1,19 +1,11 @@
-# Environment / secrets
-.env
+# Secrets and local config
+/data/.env
+/data/installed.lock
 
-# Dependencies
-vendor/
-
-# Runtime logs
-storage/logs/*.log
-
-# IDE / OS
-.vscode/
-.idea/
-*.swp
-*.swo
-.DS_Store
-Thumbs.db
-
-# SQL client session files
-*.session.sql
+# Mutable local JSON storage
+/data/users.json
+/data/groups.json
+/data/tasks.json
+/data/telemetry.json
+/data/activity.json
+/data/preferences-*.json
