@@ -1,0 +1,8 @@
+Options -Indexes
+<FilesMatch "^(users|groups|tasks|telemetry|activity|preferences-.*)\.json$">
+  Require all denied
+</FilesMatch>
+
+<FilesMatch "^(\.env|schema\.sql|db\.php|test-db\.php)$">
+  Require all denied
+</FilesMatch>
