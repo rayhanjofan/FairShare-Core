@@ -1,0 +1,19 @@
+# Environment / secrets
+.env
+
+# Dependencies
+vendor/
+
+# Runtime logs
+storage/logs/*.log
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# SQL client session files
+*.session.sql
