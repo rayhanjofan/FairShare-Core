@@ -60,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="auth-top"><a class="brand brand-light" href="login.php"><span class="brand-mark brand-logo"><img
                     src="assets/fairshare-logo.svg" alt=""></span><span>FairShare<small>COLLABORATION
                     INTELLIGENCE</small></span></a><span>Platform transparansi kontribusi</span></div>
-    <div class="auth-layout">
+    <div class="auth-layout">   
         <section class="auth-story">
             <div class="story-chip"><i></i> WORKSPACE FOR BETTER TEAMWORK</div>
             <h1>Kerja tim yang<br><span>lebih transparan.</span></h1>
@@ -92,10 +92,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </select>
                     <label for="password">Kata sandi</label><input id="password" type="password" name="password"
                         placeholder="Masukkan kata sandi" required autocomplete="current-password">
-                    <button class="btn primary auth-submit" type="submit">Masuk ke workspace <span>→</span></button>
+                    <button class="btn primary auth-submit" type="submit">Lanjutkan <span>→</span></button>
                 </form>
-                <div class="auth-note">Pilih peran yang terdaftar pada akun Supabase kamu. Pilihan ini tidak mengubah
-                    peran akun.</div>
                 <div class="auth-note">Belum punya akun? <a href="register.php">Buat akun baru</a></div>
                 <div class="auth-privacy">Data aktivitas ditampilkan untuk transparansi proyek. FairShare tidak memantau
                     perangkat secara invasif.</div>
