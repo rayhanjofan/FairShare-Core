@@ -1,8 +1,11 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/includes/bootstrap.php';
-if (current_user())
+require_once __DIR__ . '/includes/mailer.php';
+
+if (current_user()) {
   redirect('dashboard.php');
+}
 
 $error = '';
 $selectedRole = (string) ($_POST['role'] ?? 'mahasiswa');
@@ -26,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   ) {
     $error = 'Isi nama (maks. 100 karakter), NIM/NIP (maks. 30 karakter), email valid, username GitHub maksimal 100 karakter (opsional), dan kata sandi minimal 8 karakter.';
   } else {
-    // A public role dropdown must not let anyone grant themselves teacher privileges.
+    // Role dosen memerlukan validasi kode
     if ($selectedRole === 'dosen') {
       $expectedDosenCode = app_env('DOSEN_REGISTRATION_CODE', '');
       if ($expectedDosenCode === '') {
@@ -39,37 +42,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($error === '') {
       try {
         $pdo = require_db();
-        // Isi semua kolom public.users secara eksplisit agar tidak bergantung
-        // pada DEFAULT di database yang mungkin belum dikonfigurasi.
-        $stmt = $pdo->prepare(
-          'INSERT INTO public.users '
-          . '(id, nim_nip, name, email, password_hash, role, github_username, created_at, updated_at) '
-          . 'VALUES (gen_random_uuid(), :nim_nip, :name, :email, :hash, :role, :github_username, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) '
-          . 'RETURNING id::text'
+
+        // Periksa apakah NIM/NIP, email, atau username GitHub sudah terdaftar
+        $checkStmt = $pdo->prepare(
+          'SELECT id FROM public.users '
+          . 'WHERE LOWER(email) = LOWER(:email) OR nim_nip = :nim '
+          . 'OR (github_username IS NOT NULL AND :gh <> \'\' AND LOWER(github_username) = LOWER(:gh)) LIMIT 1'
         );
-        $stmt->execute([
-          'nim_nip' => $nimNip,
-          'name' => $name,
+        $checkStmt->execute([
           'email' => $email,
-          'hash' => password_hash($password, PASSWORD_DEFAULT),
-          'role' => $selectedRole,
-          'github_username' => $githubUsername !== '' ? $githubUsername : null,
+          'nim'   => $nimNip,
+          'gh'    => $githubUsername,
         ]);
-        flash('Akun berhasil dibuat. Silakan masuk dengan peran yang dipilih.');
-        redirect('login.php');
+
+        if ($checkStmt->fetch()) {
+          $error = 'NIM/NIP, email, atau username GitHub sudah terdaftar. Silakan masuk atau gunakan data lain.';
+        } else {
+          // Siapkan data akun sementara (payload) sebelum diverifikasi dengan OTP
+          $payload = [
+            'nim_nip'         => $nimNip,
+            'name'            => $name,
+            'email'           => $email,
+            'hash'            => password_hash($password, PASSWORD_DEFAULT),
+            'role'            => $selectedRole,
+            'github_username' => $githubUsername !== '' ? $githubUsername : null,
+          ];
+
+          $_SESSION['registration_payload'] = $payload;
+          $_SESSION['otp_pending_email'] = $email;
+          $_SESSION['otp_pending_purpose'] = 'registration';
+
+          // Buat OTP dan kirimkan ke email tujuan via Brevo API
+          $otpResult = create_and_send_otp($email, $name, 'registration', $payload);
+
+          if (!$otpResult['success']) {
+            $error = 'Gagal mengirim kode verifikasi ke email: ' . $otpResult['message'];
+          } else {
+            flash('Kode verifikasi telah dikirimkan ke email Gmail Anda. Silakan masukkan 6 digit kode OTP.', 'success');
+            redirect('verify_otp.php?email=' . urlencode($email) . '&purpose=registration');
+          }
+        }
       } catch (PDOException $e) {
         error_log('FairShare register SQLSTATE ' . $e->getCode() . ': ' . $e->getMessage());
         $error = match ((string) $e->getCode()) {
           '23505' => 'NIM/NIP, email, atau username GitHub sudah terdaftar. Periksa data yang kamu masukkan.',
-          '23502' => 'Database menolak kolom wajib yang kosong. Periksa kolom dan default pada public.users.',
-          '23514' => 'Nilai peran atau data lain tidak memenuhi aturan database.',
-          '42P01' => 'Tabel public.users tidak ditemukan pada schema Supabase yang dipakai.',
-          '42703' => 'Nama kolom pada query registrasi tidak sesuai dengan struktur public.users.',
-          default => 'Pendaftaran gagal. Periksa log PHP untuk detail teknis.',
+          '42P01' => 'Tabel public.users atau public.otp_codes tidak ditemukan pada Supabase.',
+          default => 'Pendaftaran gagal diproses. Periksa database atau log PHP.',
         };
       } catch (Throwable $e) {
         error_log('FairShare register: ' . $e->getMessage());
-        $error = 'Database Supabase tidak dapat diakses. Periksa data/.env, izin database, dan ekstensi pdo_pgsql.';
+        $error = 'Layanan verifikasi tidak dapat diakses. Periksa data/.env dan koneksi database.';
       }
     }
   }
@@ -82,7 +104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Daftar · FairShare</title>
-  <link rel="stylesheet" href="assets/style.css?v=4">
+  <link rel="stylesheet" href="assets/style.css?v=5">
 </head>
 
 <body class="auth-page">
@@ -94,13 +116,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <div class="story-chip"><i></i> YOUR TEAM, IN BETTER SYNC</div>
       <h1>Mulai dari tim.<br><span>Tumbuh bersama.</span></h1>
       <p>Buat ruang kerja kolaboratif, kelola tugas, dan bangun riwayat kontribusi yang bisa dipertanggungjawabkan.</p>
+      <div class="story-stats">
+        <div><b>01</b><span>Data terverifikasi</span></div>
+        <div><b>02</b><span>Proteksi email OTP</span></div>
+        <div><b>03</b><span>Kolaborasi transparan</span></div>
+      </div>
+      <div class="story-orbit orbit-one"></div>
+      <div class="story-orbit orbit-two"></div>
     </section>
     <section class="auth-panel">
       <div class="auth-card">
         <div class="auth-emblem auth-logo"><img src="assets/fairshare-logo.svg" alt="Logo FairShare"></div>
         <div class="eyebrow center">BUAT AKUN BARU</div>
         <h2>Gabung ke FairShare</h2>
-        <p class="auth-muted">Akun dan data utama disimpan di database FairShare bersama.</p>
+        <p class="auth-muted">Kode verifikasi OTP akan dikirimkan ke email Gmail Anda.</p>
         <?php if ($error !== ''): ?>
           <div class="flash error"><?= e($error) ?></div><?php endif; ?>
         <form method="post">
@@ -109,8 +138,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             maxlength="100" required value="<?= e($_POST['name'] ?? '') ?>">
           <label for="nim_nip">NIM/NIP</label><input id="nim_nip" name="nim_nip" placeholder="Masukkan NIM/NIP"
             maxlength="30" required value="<?= e($_POST['nim_nip'] ?? '') ?>">
-          <label for="email">Email kampus</label><input id="email" type="email" name="email"
-            placeholder="nama@kampus.ac.id" maxlength="150" required autocomplete="email"
+          <label for="email">Email kampus / Gmail</label><input id="email" type="email" name="email"
+            placeholder="nama@gmail.com" maxlength="150" required autocomplete="email"
             value="<?= e($_POST['email'] ?? '') ?>">
           <label for="github_username">Username GitHub <span class="muted">(opsional)</span></label><input
             id="github_username" name="github_username" placeholder="username-github" maxlength="100" autocomplete="off"
@@ -127,7 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               tidak langsung memberikan akses dosen.</small></div>
           <label for="password">Kata sandi</label><input id="password" type="password" name="password" minlength="8"
             placeholder="Minimal 8 karakter" required autocomplete="new-password">
-          <button class="btn primary auth-submit" type="submit">Buat akun <span>→</span></button>
+          <button class="btn primary auth-submit" type="submit">Lanjutkan ke Verifikasi OTP <span>→</span></button>
         </form>
         <div class="auth-note">Akun dosen memerlukan kode aktivasi yang disimpan aman pada konfigurasi server.</div>
         <div class="auth-note">Sudah punya akun? <a href="login.php">Masuk di sini</a></div>

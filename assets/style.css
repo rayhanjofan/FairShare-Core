@@ -1695,6 +1695,7 @@ button {
   padding: 20px 5vw;
   position: relative;
   z-index: 2;
+  border-bottom: 3px solid var(--line);
 }
 .brand-light {
   color: #252542;
@@ -1718,7 +1719,7 @@ button {
 .auth-story {
   position: relative;
   overflow: hidden;
-  min-height: 480px;
+  min-height: 500 px;
   border-radius: 24px;
   padding: 55px 43px;
   background: linear-gradient(145deg, #191735, #30265f 57%, #6755e9);
@@ -1886,6 +1887,29 @@ button {
   font-size: 9px;
   line-height: 1.6;
   margin-top: 6px;
+}
+.auth-forgot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  margin-bottom: 2px;
+}
+.auth-forgot a {
+  font-size: 11px;
+  color: #6b59eb;
+  font-weight: 700;
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+.auth-forgot a:hover {
+  text-decoration: underline;
+  color: #5145b9;
+}
+:root[data-theme="dark"] .auth-forgot a {
+  color: #9f91ff;
+}
+:root[data-theme="dark"] .auth-forgot a:hover {
+  color: #c7c0ff;
 }
 .auth-submit {
   width: 100%;
@@ -2488,7 +2512,7 @@ button {
   height: 48px !important;
   min-width: 48px;
   flex-basis: 48px;
-  padding: 2px !important;
+  padding: 0px !important;
 }
 .auth-top .brand.brand-light .brand-mark.brand-logo img {
   object-fit: contain;

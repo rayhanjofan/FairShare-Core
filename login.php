@@ -3,6 +3,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/includes/bootstrap.php';
 if (current_user())
     redirect('dashboard.php');
+$flash = take_flash();
 $error = '';
 $selectedRole = (string) ($_POST['role'] ?? 'mahasiswa');
 
@@ -53,14 +54,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Masuk · FairShare</title>
-    <link rel="stylesheet" href="assets/style.css?v=4">
+    <link rel="stylesheet" href="assets/style.css?v=5">
 </head>
 
 <body class="auth-page">
     <div class="auth-top"><a class="brand brand-light" href="login.php"><span class="brand-mark brand-logo"><img
-                    src="assets/fairshare-logo.svg" alt=""></span><span>FairShare<small>COLLABORATION
+                    src="assets/fairshare-logo.svg" alt=""></span><span style="font: 800 22px Manrope;">FairShare<small style="font: 600 9px Manrope;">COLLABORATION
                     INTELLIGENCE</small></span></a><span>Platform transparansi kontribusi</span></div>
-    <div class="auth-layout">   
+    <div class="auth-layout">
         <section class="auth-story">
             <div class="story-chip"><i></i> WORKSPACE FOR BETTER TEAMWORK</div>
             <h1>Kerja tim yang<br><span>lebih transparan.</span></h1>
@@ -80,6 +81,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="eyebrow center">SELAMAT DATANG KEMBALI</div>
                 <h2>Masuk ke FairShare</h2>
                 <p class="auth-muted">Lanjutkan memantau kontribusi dan progres tim kamu.</p>
+                <?php if ($flash): ?>
+                    <div class="flash <?= e($flash['type']) ?>"><?= e($flash['message']) ?></div>
+                <?php endif; ?>
                 <?php if ($error !== ''): ?>
                     <div class="flash error"><?= e($error) ?></div><?php endif; ?>
                 <form method="post"><input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
@@ -92,9 +96,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </select>
                     <label for="password">Kata sandi</label><input id="password" type="password" name="password"
                         placeholder="Masukkan kata sandi" required autocomplete="current-password">
+                    <div class="auth-forgot">
+                        <a href="reset_password.php">Lupa atau ingin ubah kata sandi?</a>
+                    </div>
                     <button class="btn primary auth-submit" type="submit">Lanjutkan <span>→</span></button>
                 </form>
-                <div class="auth-note">Belum punya akun? <a href="register.php">Buat akun baru</a></div>
+                <div class="auth-note">Belum punya akun? <a href="register.php"> Daftar sekarang</a></div>
                 <div class="auth-privacy">Data aktivitas ditampilkan untuk transparansi proyek. FairShare tidak memantau
                     perangkat secara invasif.</div>
             </div>
