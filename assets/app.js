@@ -62,6 +62,213 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 5000);
   });
 });
+// ==========================================
+// FAIRSHARE NOTIFICATION CENTER
+// ==========================================
+
+const notificationRoot = document.querySelector("[data-notification-root]");
+
+if (notificationRoot) {
+  const trigger = notificationRoot.querySelector("[data-notification-toggle]");
+
+  const panel = notificationRoot.querySelector("[data-notification-panel]");
+
+  const list = notificationRoot.querySelector("[data-notification-list]");
+
+  const badge = notificationRoot.querySelector("[data-notification-count]");
+
+  const readAllButton = notificationRoot.querySelector(
+    "[data-notification-read-all]",
+  );
+
+  const csrf = notificationRoot.dataset.csrf;
+
+  const updateBadge = (count) => {
+    const total = Number(count) || 0;
+
+    badge.textContent = total > 99 ? "99+" : String(total);
+    badge.hidden = total === 0;
+  };
+
+  const formatNotificationDate = (value) => {
+    if (!value) return "";
+
+    const date = new Date(String(value).replace(" ", "T"));
+
+    if (Number.isNaN(date.getTime())) {
+      return String(value);
+    }
+
+    return new Intl.DateTimeFormat("id-ID", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(date);
+  };
+
+  const showMessage = (message, className = "notification-empty") => {
+    const element = document.createElement("div");
+    element.className = className;
+    element.textContent = message;
+    list.replaceChildren(element);
+  };
+
+  const renderNotifications = (notifications) => {
+    list.replaceChildren();
+
+    if (!notifications.length) {
+      showMessage("Belum ada pesan untuk kamu.");
+      return;
+    }
+
+    notifications.forEach((notification) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className =
+        "notification-item" + (notification.is_read ? "" : " unread");
+
+      item.dataset.notificationId = notification.id;
+
+      const symbol = document.createElement("span");
+      symbol.className = "notification-symbol";
+
+      const symbols = {
+        info: "i",
+        success: "✓",
+        warning: "!",
+        task: "✓",
+        system: "F",
+      };
+
+      symbol.textContent = symbols[notification.category] || "i";
+
+      const content = document.createElement("span");
+      content.className = "notification-content";
+
+      const title = document.createElement("strong");
+      title.textContent = notification.title || "Notifikasi";
+
+      const message = document.createElement("p");
+      message.textContent = notification.message || "";
+
+      const meta = document.createElement("small");
+      meta.textContent =
+        (notification.sender_name || "FairShare") +
+        " · " +
+        formatNotificationDate(notification.created_at);
+
+      content.append(title, message, meta);
+      item.append(symbol, content);
+
+      if (!notification.is_read) {
+        const dot = document.createElement("span");
+        dot.className = "notification-item-dot";
+        item.append(dot);
+      }
+
+      list.append(item);
+    });
+  };
+
+  const loadNotifications = async () => {
+    showMessage("Memuat notifikasi...", "notification-loading");
+
+    try {
+      const response = await fetch("notifications.php", {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message || "Gagal memuat notifikasi.");
+      }
+
+      updateBadge(result.unread_count);
+      renderNotifications(result.items || []);
+    } catch (error) {
+      showMessage(error.message || "Notifikasi belum dapat dimuat.");
+    }
+  };
+
+  const sendNotificationAction = async (action, id = "") => {
+    const body = new URLSearchParams({
+      csrf: csrf,
+      action: action,
+      id: id,
+    });
+
+    const response = await fetch("notifications.php", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      credentials: "same-origin",
+      body: body,
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || !result.ok) {
+      throw new Error(result.message || "Aksi notifikasi gagal.");
+    }
+
+    await loadNotifications();
+  };
+
+  trigger.addEventListener("click", async () => {
+    const willOpen = panel.hidden;
+
+    panel.hidden = !willOpen;
+    trigger.setAttribute("aria-expanded", String(willOpen));
+
+    if (willOpen) {
+      await loadNotifications();
+    }
+  });
+
+  list.addEventListener("click", async (event) => {
+    const item = event.target.closest("[data-notification-id]");
+
+    if (!item || !item.classList.contains("unread")) {
+      return;
+    }
+
+    try {
+      await sendNotificationAction("mark_read", item.dataset.notificationId);
+    } catch (error) {
+      toast(error.message || "Gagal membaca notifikasi.");
+    }
+  });
+
+  readAllButton.addEventListener("click", async () => {
+    try {
+      await sendNotificationAction("mark_all_read");
+    } catch (error) {
+      toast(error.message || "Gagal menandai notifikasi.");
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!notificationRoot.contains(event.target) && !panel.hidden) {
+      panel.hidden = true;
+      trigger.setAttribute("aria-expanded", "false");
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !panel.hidden) {
+      panel.hidden = true;
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.focus();
+    }
+  });
+}
 function toast(message) {
   let el = document.createElement("div");
   el.className = "toast";

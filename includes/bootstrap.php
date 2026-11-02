@@ -119,6 +119,58 @@ function log_activity(string $title, string $detail, string $type = 'info'): voi
     $logs = read_data('activity.json', []);
     array_unshift($logs, ['id' => bin2hex(random_bytes(5)), 'title' => $title, 'detail' => $detail, 'type' => $type, 'time' => date('Y-m-d H:i:s'), 'user' => current_user()['name'] ?? 'Sistem']);
     write_data('activity.json', array_slice($logs, 0, 500));
+    /**
+     * Mengirim notifikasi kepada pengguna tertentu.
+     *
+     * $category: info, success, warning, task, atau system.
+     */
+    function send_notification(
+        string $recipientId,
+        string $title,
+        string $message,
+        string $category = 'info',
+        ?string $senderId = null
+    ): void {
+        if (!valid_uuid($recipientId)) {
+            throw new InvalidArgumentException('ID penerima notifikasi tidak valid.');
+        }
+
+        if ($senderId !== null && !valid_uuid($senderId)) {
+            throw new InvalidArgumentException('ID pengirim notifikasi tidak valid.');
+        }
+
+        $allowedCategories = ['info', 'success', 'warning', 'task', 'system'];
+
+        if (!in_array($category, $allowedCategories, true)) {
+            $category = 'info';
+        }
+
+        $pdo = require_db();
+
+        $stmt = $pdo->prepare("
+        INSERT INTO public.notifications (
+            recipient_id,
+            sender_id,
+            title,
+            message,
+            category
+        ) VALUES (
+            CAST(:recipient_id AS UUID),
+            CAST(:sender_id AS UUID),
+            :title,
+            :message,
+            :category
+        )
+    ");
+
+        $stmt->execute([
+            'recipient_id' => $recipientId,
+            'sender_id' => $senderId,
+            'title' => $title,
+            'message' => $message,
+            'category' => $category
+        ]);
+    }
 }
 function valid_uuid(string $value): bool
 {
@@ -294,7 +346,7 @@ function layout_start(string $title, string $active = 'dashboard'): void
         'reports' => ['▤', 'Laporan Audit', 'reports.php'],
         'settings' => ['⚙', 'Pengaturan', 'settings.php'],
     ];
-    echo '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . e($title) . ' · FairShare</title><link rel="stylesheet" href="assets/style.css?v=2"><script defer src="assets/app.js"></script></head><body>';
+   echo '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . e($title) . ' · FairShare</title><link rel="stylesheet" href="assets/style.css?v=3"><script defer src="assets/app.js?v=3"></script></head><body>';
     echo '<aside class="sidebar" id="sidebar"><a class="brand" href="dashboard.php"><span class="brand-mark brand-logo"><img src="assets/fairshare-logo.svg" alt=""></span><span>FairShare<small>COLLABORATION INTELLIGENCE</small></span></a><div class="nav-caption">WORKSPACE</div><nav class="nav">';
     foreach ($nav as $key => $item) {
         if ($key === 'classroom' && !is_teacher($user))
@@ -302,7 +354,72 @@ function layout_start(string $title, string $active = 'dashboard'): void
         echo '<a class="' . ($active === $key ? 'active' : '') . '" href="' . $item[2] . '"><span class="nav-icon">' . $item[0] . '</span><span>' . $item[1] . '</span>' . ($active === $key ? '<i></i>' : '') . '</a>';
     }
     echo '</nav><div class="sidebar-bottom"><div class="workspace-card"><span class="workspace-icon">✦</span><div><b>FairShare Project</b><small>Semester Genap · 2026</small></div><span class="online-dot"></span></div><div class="profile-mini"><span class="avatar">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span><div><b>' . e($user['name']) . '</b><small>' . e(ucfirst((string) ($user['role'] ?? 'mahasiswa'))) . '</small></div><a href="settings.php" title="Pengaturan">···</a></div></div></aside>';
-    echo '<div class="app-shell"><header class="topbar"><div class="topbar-left"><button class="mobile-menu" data-menu-toggle aria-label="Buka menu">☰</button><div><div class="breadcrumb">FAIRSHARE <span>/</span> ' . e(strtoupper($title)) . '</div><div class="topbar-sub">Workspace kontribusi dan transparansi kolaborasi</div></div></div><div class="topbar-actions"><span class="system-status"><i></i> Sistem aktif</span><button class="theme-toggle" type="button" data-theme-toggle aria-label="Ganti tema" title="Ganti tema"><span class="theme-icon">☾</span><span class="theme-label">Dark mode</span></button><button class="icon-btn" data-toast="Tidak ada notifikasi baru" aria-label="Notifikasi">♧<em></em></button><span class="avatar avatar-top">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span><div class="top-user"><b>' . e($user['name']) . '</b><small>' . e(ucfirst((string) ($user['role'] ?? 'mahasiswa'))) . '</small></div></div></header><main class="main-content">';
+    echo '<div class="app-shell"><header class="topbar"><div class="topbar-left"><button class="mobile-menu" data-menu-toggle aria-label="Buka menu">☰</button><div><div class="breadcrumb">FAIRSHARE <span>/</span> ' . e(strtoupper($title)) . '</div><div class="topbar-sub">Workspace kontribusi dan transparansi kolaborasi</div></div></div><div class="topbar-actions"><span class="system-status"><i></i> Sistem aktif</span><button class="theme-toggle" type="button" data-theme-toggle aria-label="Ganti tema" title="Ganti tema"><span class="theme-icon">☾</span><span class="theme-label">Dark mode</span></button>
+    <div class="notification-wrap"
+     data-notification-root
+     data-csrf="<?= e(csrf_token()) ?>">
+
+    <button
+        class="icon-btn notification-trigger"
+        type="button"
+        data-notification-toggle
+        aria-label="Buka notifikasi"
+        aria-expanded="false"
+        aria-controls="notificationPanel">
+
+        <svg viewBox="0 0 24 24"
+             width="20"
+             height="20"
+             fill="none"
+             stroke="currentColor"
+             stroke-width="1.8"
+             stroke-linecap="round"
+             stroke-linejoin="round"
+             aria-hidden="true">
+
+            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/>
+            <path d="M10 21h4"/>
+        </svg>
+
+        <span class="notification-badge"
+              data-notification-count
+              hidden>0</span>
+    </button>
+
+    <section
+        class="notification-panel"
+        id="notificationPanel"
+        data-notification-panel
+        aria-label="Daftar notifikasi"
+        hidden>
+
+        <div class="notification-head">
+            <div>
+                <strong>Notifikasi</strong>
+                <small>Pesan terbaru untuk kamu</small>
+            </div>
+
+            <button
+                type="button"
+                class="notification-read-all"
+                data-notification-read-all>
+                Tandai semua dibaca
+            </button>
+        </div>
+
+        <div class="notification-list" data-notification-list>
+            <div class="notification-loading">
+                Memuat notifikasi...
+            </div>
+        </div>
+
+        <div class="notification-footer">
+            Notifikasi akun FairShare
+        </div>
+
+    </section>
+</div>
+    <span class="avatar avatar-top">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span><div class="top-user"><b>' . e($user['name']) . '</b><small>' . e(ucfirst((string) ($user['role'] ?? 'mahasiswa'))) . '</small></div></div></header><main class="main-content">';
     if ($flash)
         echo '<div class="flash ' . e($flash['type']) . '" data-flash>' . e($flash['message']) . '</div>';
 }
