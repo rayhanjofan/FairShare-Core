@@ -1,0 +1,11 @@
+# Secrets and local config
+/data/.env
+/data/installed.lock
+
+# Mutable local JSON storage
+/data/users.json
+/data/groups.json
+/data/tasks.json
+/data/telemetry.json
+/data/activity.json
+/data/preferences-*.json
