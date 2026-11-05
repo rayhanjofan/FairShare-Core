@@ -346,7 +346,7 @@ function layout_start(string $title, string $active = 'dashboard'): void
         'reports' => ['▤', 'Laporan Audit', 'reports.php'],
         'settings' => ['⚙', 'Pengaturan', 'settings.php'],
     ];
-   echo '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . e($title) . ' · FairShare</title><link rel="stylesheet" href="assets/style.css?v=3"><script defer src="assets/app.js?v=3"></script></head><body>';
+   echo '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . e($title) . ' · FairShare</title><link rel="stylesheet" href="assets/style.css?v=4"><script defer src="assets/app.js?v=4"></script></head><body>';
     echo '<aside class="sidebar" id="sidebar"><a class="brand" href="dashboard.php"><span class="brand-mark brand-logo"><img src="assets/fairshare-logo.svg" alt=""></span><span>FairShare<small>COLLABORATION INTELLIGENCE</small></span></a><div class="nav-caption">WORKSPACE</div><nav class="nav">';
     foreach ($nav as $key => $item) {
         if ($key === 'classroom' && !is_teacher($user))
@@ -419,7 +419,38 @@ function layout_start(string $title, string $active = 'dashboard'): void
 
     </section>
 </div>
-    <span class="avatar avatar-top">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span><div class="top-user"><b>' . e($user['name']) . '</b><small>' . e(ucfirst((string) ($user['role'] ?? 'mahasiswa'))) . '</small></div></div></header><main class="main-content">';
+    <div class="profile-menu" data-profile-menu>
+        <button class="profile-trigger"
+                type="button"
+                data-profile-toggle
+                aria-haspopup="menu"
+                aria-expanded="false"
+                aria-controls="profilePanel"
+                title="Menu profil">
+
+            <span class="avatar avatar-top">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span>
+
+            <span class="top-user">
+                <b>' . e($user['name']) . '</b>
+                <small>' . e(ucfirst((string) ($user['role'] ?? 'mahasiswa'))) . '</small>
+            </span>
+
+            <span class="profile-caret" aria-hidden="true">▾</span>
+        </button>
+
+        <div class="profile-dropdown"
+             id="profilePanel"
+             data-profile-panel
+             role="menu"
+             hidden>
+
+            <a class="profile-item danger" role="menuitem" href="logout.php">
+                <span aria-hidden="true">↪</span> Keluar
+            </a>
+        </div>
+    </div>
+    </div>
+    </header><main class="main-content">';
     if ($flash)
         echo '<div class="flash ' . e($flash['type']) . '" data-flash>' . e($flash['message']) . '</div>';
 }
@@ -440,3 +471,7 @@ function format_date(string $date): string
     $ts = strtotime($date);
     return $ts ? date('d M Y', $ts) : $date;
 }
+ 
+
+
+
