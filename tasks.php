@@ -1,70 +1,434 @@
 <?php
-require_once __DIR__.'/includes/bootstrap.php';
-$user=require_login(); $error=''; $teacher=is_teacher($user); $groups=visible_groups($user);
-if($_SERVER['REQUEST_METHOD']==='POST'){
-    if($teacher){http_response_code(403);exit('Mode dosen bersifat pemantauan; perubahan tugas dilakukan oleh anggota kelompok.');}
-    verify_csrf(); $action=(string)($_POST['action']??'');
+declare(strict_types=1);
+
+require_once __DIR__ . '/includes/bootstrap.php';
+
+$user = require_login();
+$teacher = is_teacher($user);
+$error = '';
+$groups = visible_groups($user);
+$classes = visible_classes($user);
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    verify_csrf();
+    $action = (string) ($_POST['action'] ?? '');
+
     try {
-        $pdo=require_db();
-        if($action==='create'){
-            $title=trim((string)($_POST['title']??'')); $gid=(string)($_POST['group_id']??'');
-            $status=db_task_status((string)($_POST['status']??'Belum dikerjakan'));
-            $targetWeek=max(1,(int)($_POST['target_week']??1)); $weight=max(1,min(5,(int)($_POST['weight']??1)));
-            $group=group_by_id($gid);
-            $isMember=$group && (in_array(strtolower((string)$user['id']),array_map('strtolower',$group['member_ids']??[]),true) || strtolower((string)$group['created_by'])===strtolower((string)$user['id']));
-            if($title==='' || mb_strlen($title)>200 || !$isMember) $error='Judul tugas valid dan kelompok yang kamu ikuti wajib dipilih.';
-            else {
-                $stmt=$pdo->prepare("INSERT INTO public.tasks (group_id,assigned_user_id,title,weight,status,target_week,completed_at) VALUES (CAST(:gid AS uuid),CAST(:uid AS uuid),:title,:weight,:status,:target_week,CASE WHEN :status_done='done' THEN CURRENT_TIMESTAMP ELSE NULL END)");
-                $stmt->execute(['gid'=>$gid,'uid'=>$user['id'],'title'=>$title,'weight'=>$weight,'status'=>$status,'target_week'=>$targetWeek,'status_done'=>$status]);
-                log_activity('Tugas dibuat',$title,'success'); flash('Tugas berhasil ditambahkan dan disimpan ke Supabase.'); redirect('tasks.php');
+        $pdo = require_db();
+
+        if ($action === 'create') {
+            $title = trim((string) ($_POST['title'] ?? ''));
+            $desc = trim((string) ($_POST['description'] ?? ''));
+            $status = db_task_status((string) ($_POST['status'] ?? 'Belum dikerjakan'));
+            $targetWeek = max(1, (int) ($_POST['target_week'] ?? 1));
+            $weight = max(1, min(5, (int) ($_POST['weight'] ?? 1)));
+
+            if ($title === '' || mb_strlen($title) > 200) {
+                $error = 'Judul tugas valid wajib diisi (maksimal 200 karakter).';
+            } else {
+                if ($teacher) {
+                    // Dosen membuat tugas: bisa untuk semua kelompok di suatu kelas atau kelompok tertentu
+                    $scope = (string) ($_POST['scope'] ?? 'single');
+                    $classId = trim((string) ($_POST['class_id'] ?? ''));
+                    $singleGid = trim((string) ($_POST['group_id'] ?? ''));
+
+                    $targetGroupIds = [];
+
+                    if ($scope === 'all_in_class' && valid_uuid($classId)) {
+                        // Pastikan dosen pemilik kelas
+                        $class = class_by_id($classId);
+                        if (!$class || strtolower((string) $class['created_by']) !== strtolower((string) $user['id'])) {
+                            throw new RuntimeException('Kamu tidak berwenang mengelola kelas ini.');
+                        }
+                        $allClassTeams = class_teams($classId);
+                        $targetGroupIds = array_column($allClassTeams, 'id');
+                        if (empty($targetGroupIds)) {
+                            throw new RuntimeException('Belum ada kelompok yang terbentuk di kelas ini.');
+                        }
+                    } elseif (valid_uuid($singleGid)) {
+                        $group = group_by_id($singleGid);
+                        if (!$group || !can_manage_group($group, $user)) {
+                            throw new RuntimeException('Kamu tidak memiliki akses ke kelompok ini.');
+                        }
+                        $targetGroupIds = [$singleGid];
+                    } else {
+                        throw new RuntimeException('Kelompok atau kelas target tidak valid.');
+                    }
+
+                    $pdo->beginTransaction();
+                    $stmt = $pdo->prepare("
+                        INSERT INTO public.tasks (
+                            id,
+                            group_id,
+                            assigned_user_id,
+                            title,
+                            description,
+                            weight,
+                            status,
+                            target_week,
+                            completed_at,
+                            created_at,
+                            updated_at
+                        ) VALUES (
+                            gen_random_uuid(),
+                            CAST(:gid AS uuid),
+                            NULL,
+                            :title,
+                            :description,
+                            :weight,
+                            :status,
+                            :target_week,
+                            CASE WHEN :status_done = 'done' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                            CURRENT_TIMESTAMP,
+                            CURRENT_TIMESTAMP
+                        )
+                    ");
+
+                    foreach ($targetGroupIds as $tgid) {
+                        $stmt->execute([
+                            'gid'         => $tgid,
+                            'title'       => $title,
+                            'description' => $desc !== '' ? $desc : null,
+                            'weight'      => $weight,
+                            'status'      => $status,
+                            'target_week' => $targetWeek,
+                            'status_done' => $status,
+                        ]);
+                    }
+
+                    $pdo->commit();
+                    $cnt = count($targetGroupIds);
+                    log_activity('Tugas dibuat oleh dosen', "$title untuk $cnt kelompok", 'success');
+                    flash("Tugas berhasil dibagikan kepada $cnt kelompok.");
+                    redirect('tasks.php');
+                } else {
+                    // Mahasiswa membuat tugas untuk kelompoknya
+                    $gid = trim((string) ($_POST['group_id'] ?? ''));
+                    $group = group_by_id($gid);
+                    $isMember = $group && in_array(strtolower((string) $user['id']), array_map('strtolower', $group['member_ids'] ?? []), true);
+
+                    if (!$group || !$isMember) {
+                        $error = 'Pilih kelompok yang kamu ikuti.';
+                    } else {
+                        $stmt = $pdo->prepare("
+                            INSERT INTO public.tasks (
+                                id,
+                                group_id,
+                                assigned_user_id,
+                                title,
+                                description,
+                                weight,
+                                status,
+                                target_week,
+                                completed_at,
+                                created_at,
+                                updated_at
+                            ) VALUES (
+                                gen_random_uuid(),
+                                CAST(:gid AS uuid),
+                                CAST(:uid AS uuid),
+                                :title,
+                                :description,
+                                :weight,
+                                :status,
+                                :target_week,
+                                CASE WHEN :status_done = 'done' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                                CURRENT_TIMESTAMP,
+                                CURRENT_TIMESTAMP
+                            )
+                        ");
+                        $stmt->execute([
+                            'gid'         => $gid,
+                            'uid'         => (string) $user['id'],
+                            'title'       => $title,
+                            'description' => $desc !== '' ? $desc : null,
+                            'weight'      => $weight,
+                            'status'      => $status,
+                            'target_week' => $targetWeek,
+                            'status_done' => $status,
+                        ]);
+
+                        log_activity('Tugas kelompok dibuat', $title, 'success');
+                        flash('Tugas berhasil ditambahkan ke WBS kelompok.');
+                        redirect('tasks.php');
+                    }
+                }
             }
-        } elseif($action==='update'){
-            $id=(string)($_POST['id']??''); $status=db_task_status((string)($_POST['status']??'Belum dikerjakan'));
-            if(!valid_uuid($id)) $error='ID tugas tidak valid.';
-            else {
-                $taskStmt=$pdo->prepare('SELECT id::text AS id,group_id::text AS group_id FROM public.tasks WHERE id=CAST(:id AS uuid)');
-                $taskStmt->execute(['id'=>$id]); $task=$taskStmt->fetch();
-                $allowedGroups=array_column($groups,'id');
-                if(!$task || !in_array($task['group_id'],$allowedGroups,true)) $error='Tugas tidak ditemukan atau kamu tidak memiliki akses ke kelompok ini.';
-                else {
-                    $stmt=$pdo->prepare("UPDATE public.tasks SET status=:status, completed_at=CASE WHEN :status_done='done' THEN COALESCE(completed_at,CURRENT_TIMESTAMP) ELSE NULL END, updated_at=CURRENT_TIMESTAMP WHERE id=CAST(:id AS uuid)");
-                    $stmt->execute(['status'=>$status,'status_done'=>$status,'id'=>$id]);
-                    log_activity('Status tugas diperbarui','Status tugas diubah menjadi '.ui_task_status($status),'success'); flash('Status tugas diperbarui di Supabase.'); redirect('tasks.php');
+        } elseif ($action === 'update') {
+            $id = trim((string) ($_POST['id'] ?? ''));
+            $status = db_task_status((string) ($_POST['status'] ?? 'Belum dikerjakan'));
+
+            if (!valid_uuid($id)) {
+                $error = 'ID tugas tidak valid.';
+            } else {
+                $taskStmt = $pdo->prepare("
+                    SELECT t.id::text AS id, t.group_id::text AS group_id, g.parent_group_id::text AS parent_group_id
+                    FROM public.tasks t
+                    JOIN public.groups g ON g.id = t.group_id
+                    WHERE t.id = CAST(:id AS uuid)
+                    LIMIT 1
+                ");
+                $taskStmt->execute(['id' => $id]);
+                $task = $taskStmt->fetch(PDO::FETCH_ASSOC);
+
+                $allowedGroups = array_map('strtolower', array_column($groups, 'id'));
+                if (!$task || !in_array(strtolower((string) $task['group_id']), $allowedGroups, true)) {
+                    $error = 'Tugas tidak ditemukan atau kamu tidak memiliki akses ke kelompok ini.';
+                } else {
+                    $stmt = $pdo->prepare("
+                        UPDATE public.tasks
+                        SET status = :status,
+                            completed_at = CASE WHEN :status_done = 'done' THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE NULL END,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = CAST(:id AS uuid)
+                    ");
+                    $stmt->execute([
+                        'status'      => $status,
+                        'status_done' => $status,
+                        'id'          => $id,
+                    ]);
+
+                    log_activity('Status tugas diperbarui', 'Status diubah menjadi ' . ui_task_status($status), 'success');
+                    flash('Status tugas berhasil diperbarui di Supabase.');
+                    redirect('tasks.php');
                 }
             }
         }
-    } catch(PDOException $e){ error_log('FairShare tasks SQLSTATE '.$e->getCode().': '.$e->getMessage()); $error='Tugas gagal disimpan. Periksa data dan izin database.'; }
-      catch(Throwable $e){ error_log('FairShare tasks: '.$e->getMessage()); $error='Database Supabase tidak dapat diakses. Periksa data/.env.'; }
-}
-$groups=visible_groups($user); $allTasks=all_tasks(); $groupIds=array_column($groups,'id');
-$tasks=$teacher?array_values(array_filter($allTasks,fn($t)=>in_array($t['group_id']??'',$groupIds,true))):user_tasks((string)$user['id']);
-$requestedGroup=(string)($_GET['group']??''); if($requestedGroup!=='' && valid_uuid($requestedGroup)) $tasks=array_values(array_filter($tasks,fn($t)=>strtolower((string)$t['group_id'])===strtolower($requestedGroup)));
-$filter=(string)($_GET['status']??''); if($filter!=='')$tasks=array_values(array_filter($tasks,fn($t)=>($t['status']??'')===$filter));
-layout_start('WBS & Tugas','tasks'); page_heading($teacher?'DOSEN / MONITORING':'WORKSPACE / WORK BREAKDOWN STRUCTURE','WBS & Tugas',$teacher?'Pantau status dan minggu target tugas dari kelompok yang tersedia.':'Pecah pekerjaan menjadi tugas yang terukur, dengan bobot, penanggung jawab, dan target minggu.',$teacher?'<a class="btn secondary" href="classroom.php">Kembali ke monitor</a>':'<a class="btn primary" href="#new-task">＋ Tambah tugas</a>');
-if($error) echo '<div class="flash error">'.e($error).'</div>';
-$allUserTasks=$tasks;
-echo '<div class="stats-grid three-stats"><article class="stat-card"><div class="stat-label">TOTAL TUGAS</div><div class="stat-number">'.count($allUserTasks).'</div><div class="stat-foot">Dalam workspace yang terlihat</div></article><article class="stat-card"><div class="stat-label">SEDANG DIKERJAKAN</div><div class="stat-number">'.count(array_filter($allUserTasks,fn($t)=>$t['status']==='Dikerjakan')).'</div><div class="stat-foot">Aktivitas berjalan</div></article><article class="stat-card"><div class="stat-label">SELESAI</div><div class="stat-number">'.count(array_filter($allUserTasks,fn($t)=>$t['status']==='Selesai')).'</div><div class="stat-foot">Tugas selesai dikerjakan</div></article></div>';
-echo '<div class="kanban-filter"><span class="filter-caption">FILTER STATUS</span><a href="tasks.php">Semua</a><a href="tasks.php?status=Belum%20dikerjakan">Belum dikerjakan</a><a href="tasks.php?status=Dikerjakan">Dikerjakan</a><a href="tasks.php?status=Review">Review</a><a href="tasks.php?status=Selesai">Selesai</a></div><div class="task-board">';
-$columns=['Belum dikerjakan'=>'todo','Dikerjakan'=>'doing','Review'=>'review','Selesai'=>'done'];
-foreach($columns as $statusLabel=>$cls){
-    $subset=array_values(array_filter($tasks,fn($t)=>$t['status']===$statusLabel));
-    echo '<section class="kanban-column"><div class="kanban-head"><span class="kanban-dot '.$cls.'"></span><b>'.e($statusLabel).'</b><span class="kanban-count">'.count($subset).'</span></div>';
-    foreach($subset as $t){
-        $id=e($t['id']); echo '<article class="kanban-card"><div class="kanban-card-top"><span class="task-tag">'.e($t['weight']).'× bobot</span><span class="muted">···</span></div><h3>'.e($t['title']).'</h3><p>'.e($t['group_name']??'Kelompok').'</p><div class="kanban-card-bottom"><span class="due-date">◷ '.e($t['due_date']??('Minggu target '.($t['target_week']??1))).'</span>';
-        if($teacher) echo '<span class="task-state">'.e($t['status']).'</span>';
-        else { echo '<form method="post" class="status-form"><input type="hidden" name="csrf" value="'.e(csrf_token()).'"><input type="hidden" name="action" value="update"><input type="hidden" name="id" value="'.$id.'"><select name="status" aria-label="Ubah status" onchange="this.form.submit()">'; foreach(array_keys($columns) as $s) echo '<option '.($s===($t['status']??'')?'selected':'').' value="'.e($s).'">'.e($s).'</option>'; echo '</select></form>'; }
-        echo '</div></article>';
+    } catch (PDOException $e) {
+        error_log('FairShare tasks SQLSTATE ' . $e->getCode() . ': ' . $e->getMessage());
+        if (isset($pdo) && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        $error = 'Tugas gagal disimpan: ' . $e->getMessage();
+    } catch (Throwable $e) {
+        error_log('FairShare tasks: ' . $e->getMessage());
+        if (isset($pdo) && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        $error = $e->getMessage();
     }
-    if(!$teacher) echo '<a class="kanban-add" href="#new-task">＋ Tambah tugas</a>';
-    echo '</section>';
 }
-echo '</div>';
-if(!$teacher){
-    echo '<section class="panel task-create-panel" id="new-task"><div class="panel-heading"><div><div class="panel-title">Tambah tugas WBS</div><div class="panel-sub">Tugas disimpan dalam tabel tasks di Supabase.</div></div></div>';
-    if(!$groups) echo '<div class="flash error">Buat atau gabung kelompok terlebih dahulu di halaman Tim & Kelompok.</div>';
-    else {
-        echo '<form method="post" class="form-grid"><input type="hidden" name="csrf" value="'.e(csrf_token()).'"><input type="hidden" name="action" value="create"><div class="field-wide"><label>Nama tugas</label><input name="title" maxlength="200" required placeholder="Contoh: Rancang halaman dashboard"></div><div><label>Kelompok</label><select name="group_id" required>'; foreach($groups as $g) echo '<option value="'.e($g['id']).'">'.e($g['name']).'</option>'; echo '</select></div><div><label>Bobot kesulitan (1–5)</label><select name="weight"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></div><div><label>Status awal</label><select name="status"><option>Belum dikerjakan</option><option>Dikerjakan</option><option>Review</option><option>Selesai</option></select></div><div><label>Target minggu</label><input type="number" name="target_week" min="1" max="52" value="1" required></div><div class="field-actions"><button class="btn primary">Simpan tugas →</button></div></form>';
+
+$allTasks = all_tasks();
+$groupIds = array_map('strtolower', array_column($groups, 'id'));
+$tasks = array_values(array_filter($allTasks, fn($t) => in_array(strtolower((string) ($t['group_id'] ?? '')), $groupIds, true)));
+
+$requestedGroup = trim((string) ($_GET['group'] ?? ''));
+if ($requestedGroup !== '' && valid_uuid($requestedGroup)) {
+    $tasks = array_values(array_filter($tasks, fn($t) => strtolower((string) $t['group_id']) === strtolower($requestedGroup)));
+}
+
+$filterStatus = trim((string) ($_GET['status'] ?? ''));
+if ($filterStatus !== '') {
+    $tasks = array_values(array_filter($tasks, fn($t) => ($t['status'] ?? '') === $filterStatus));
+}
+
+layout_start($teacher ? 'Pemantauan Tugas' : 'Tugas', 'tasks');
+
+page_heading(
+    $teacher ? 'DOSEN / PEMANTAUAN WBS' : 'WORKSPACE / WORK BREAKDOWN STRUCTURE',
+    $teacher ? 'Pemantauan Tugas WBS' : 'WBS & Tugas Kelompok',
+    $teacher ? 'Pantau pembagian kerja, status, dan target minggu tugas kelompok di kelasmu.' : 'Pecah pekerjaan menjadi tugas yang terukur, dengan bobot kesulitan, penanggung jawab, dan target minggu.',
+    '<a class="btn primary" href="#new-task">＋ Tambah Tugas</a>'
+);
+
+if ($error) {
+    echo '<div class="flash error">' . e($error) . '</div>';
+}
+
+$allUserTasks = $tasks;
+$doneCount = count(array_filter($allUserTasks, fn($t) => ($t['status_db'] ?? '') === 'done'));
+$inProgCount = count(array_filter($allUserTasks, fn($t) => ($t['status_db'] ?? '') === 'in_progress'));
+?>
+
+<div class="stats-grid three-stats">
+    <article class="stat-card">
+        <div class="stat-label">TOTAL TUGAS TERPANTAU</div>
+        <div class="stat-number"><?= count($allUserTasks) ?></div>
+        <div class="stat-foot"><?= $teacher ? 'Tugas dalam kelasmu' : 'Tugas dalam kelompokmu' ?></div>
+    </article>
+    <article class="stat-card">
+        <div class="stat-label">SEDANG DIKERJAKAN</div>
+        <div class="stat-number"><?= $inProgCount ?></div>
+        <div class="stat-foot">Aktivitas pengerjaan berjalan</div>
+    </article>
+    <article class="stat-card">
+        <div class="stat-label">SELESAI DIKERJAKAN</div>
+        <div class="stat-number"><?= $doneCount ?></div>
+        <div class="stat-foot">Target WBS tuntas</div>
+    </article>
+</div>
+
+<div class="kanban-filter">
+    <span class="filter-caption">FILTER STATUS</span>
+    <a class="<?= $filterStatus === '' ? 'active' : '' ?>" href="tasks.php<?= $requestedGroup ? '?group=' . urlencode($requestedGroup) : '' ?>">Semua</a>
+    <a class="<?= $filterStatus === 'Belum dikerjakan' ? 'active' : '' ?>" href="tasks.php?status=Belum%20dikerjakan<?= $requestedGroup ? '&group=' . urlencode($requestedGroup) : '' ?>">Belum dikerjakan</a>
+    <a class="<?= $filterStatus === 'Dikerjakan' ? 'active' : '' ?>" href="tasks.php?status=Dikerjakan<?= $requestedGroup ? '&group=' . urlencode($requestedGroup) : '' ?>">Dikerjakan</a>
+    <a class="<?= $filterStatus === 'Review' ? 'active' : '' ?>" href="tasks.php?status=Review<?= $requestedGroup ? '&group=' . urlencode($requestedGroup) : '' ?>">Review</a>
+    <a class="<?= $filterStatus === 'Selesai' ? 'active' : '' ?>" href="tasks.php?status=Selesai<?= $requestedGroup ? '&group=' . urlencode($requestedGroup) : '' ?>">Selesai</a>
+</div>
+
+<div class="task-board">
+    <?php
+    $columns = [
+        'Belum dikerjakan' => 'todo',
+        'Dikerjakan'       => 'doing',
+        'Review'           => 'review',
+        'Selesai'          => 'done',
+    ];
+    foreach ($columns as $statusLabel => $cls):
+        $subset = array_values(array_filter($tasks, fn($t) => ($t['status'] ?? '') === $statusLabel));
+    ?>
+        <section class="kanban-column">
+            <div class="kanban-head">
+                <span class="kanban-dot <?= $cls ?>"></span>
+                <b><?= e($statusLabel) ?></b>
+                <span class="kanban-count"><?= count($subset) ?></span>
+            </div>
+            <?php foreach ($subset as $t): ?>
+                <?php $tid = e($t['id']); ?>
+                <article class="kanban-card">
+                    <div class="kanban-card-top">
+                        <span class="task-tag"><?= e($t['weight']) ?>× bobot</span>
+                        <span class="pill blue-pill" style="font-size:9px;"><?= e($t['group_name'] ?? 'Kelompok') ?></span>
+                    </div>
+                    <h3><?= e($t['title']) ?></h3>
+                    <?php if (!empty($t['description'])): ?>
+                        <p style="font-size:11px; color:#7e849e; margin-top:4px;"><?= e($t['description']) ?></p>
+                    <?php endif; ?>
+                    <div class="kanban-card-bottom">
+                        <span class="due-date">◷ <?= e($t['due_date'] ?? ('Minggu ' . ($t['target_week'] ?? 1))) ?></span>
+                        <form method="post" class="status-form">
+                            <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
+                            <input type="hidden" name="action" value="update">
+                            <input type="hidden" name="id" value="<?= $tid ?>">
+                            <select name="status" aria-label="Ubah status" onchange="this.form.submit()">
+                                <?php foreach (array_keys($columns) as $s): ?>
+                                    <option <?= $s === ($t['status'] ?? '') ? 'selected' : '' ?> value="<?= e($s) ?>"><?= e($s) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </form>
+                    </div>
+                </article>
+            <?php endforeach; ?>
+            <a class="kanban-add" href="#new-task">＋ Tambah tugas</a>
+        </section>
+    <?php endforeach; ?>
+</div>
+
+<section class="panel task-create-panel" id="new-task">
+    <div class="panel-heading">
+        <div>
+            <div class="panel-title"><?= $teacher ? 'Tambah Tugas Kelas / Kelompok' : 'Tambah Tugas WBS Kelompok' ?></div>
+            <div class="panel-sub">Tugas dicatat dalam tabel tasks Supabase untuk pemantauan progres kolaborasi.</div>
+        </div>
+    </div>
+
+    <?php if (!$groups): ?>
+        <div class="flash error">
+            <?= $teacher
+                ? 'Belum ada kelompok yang terbentuk pada kelasmu. Buat kelompok terlebih dahulu di menu Kelas Saya.'
+                : 'Buat atau gabung ke kelompok terlebih dahulu di menu Kelompok Saya.'
+            ?>
+        </div>
+    <?php else: ?>
+        <form method="post" class="form-grid">
+            <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
+            <input type="hidden" name="action" value="create">
+
+            <div class="field-wide">
+                <label>Judul Tugas WBS <span class="text-danger">*</span></label>
+                <input name="title" maxlength="200" required placeholder="Contoh: Implementasi API dan Database Schema">
+            </div>
+
+            <div class="field-wide">
+                <label>Deskripsi / Instruksi Pengerjaan</label>
+                <textarea name="description" rows="2" placeholder="Detail kriteria tugas, batasan teknis, atau dokumen rujukan..."></textarea>
+            </div>
+
+            <?php if ($teacher): ?>
+                <div>
+                    <label>Lingkup Penerima</label>
+                    <select name="scope" id="taskScopeSelect" onchange="toggleScopeInputs()">
+                        <option value="single">Kelompok Tertentu</option>
+                        <option value="all_in_class">Semua Kelompok di Kelas</option>
+                    </select>
+                </div>
+
+                <div id="singleGroupField">
+                    <label>Pilih Kelompok Penerima</label>
+                    <select name="group_id">
+                        <?php foreach ($groups as $g): ?>
+                            <option value="<?= e($g['id']) ?>"><?= e($g['name']) ?> (<?= e($g['course'] ?? 'Kelas') ?>)</option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div id="classField" hidden>
+                    <label>Pilih Kelas</label>
+                    <select name="class_id">
+                        <?php foreach ($classes as $cl): ?>
+                            <option value="<?= e($cl['id']) ?>"><?= e($cl['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            <?php else: ?>
+                <div>
+                    <label>Kelompok Kamu <span class="text-danger">*</span></label>
+                    <select name="group_id" required>
+                        <?php foreach ($groups as $g): ?>
+                            <option value="<?= e($g['id']) ?>"><?= e($g['name']) ?> (<?= e($g['course'] ?? 'Kelas') ?>)</option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            <?php endif; ?>
+
+            <div>
+                <label>Bobot Kesulitan (1–5)</label>
+                <select name="weight">
+                    <option value="1">1 - Sangat Ringan</option>
+                    <option value="2">2 - Ringan</option>
+                    <option value="3" selected>3 - Sedang</option>
+                    <option value="4">4 - Berat</option>
+                    <option value="5">5 - Sangat Kompleks</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Status Awal</label>
+                <select name="status">
+                    <option>Belum dikerjakan</option>
+                    <option>Dikerjakan</option>
+                    <option>Review</option>
+                    <option>Selesai</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Target Minggu Ke-</label>
+                <input type="number" name="target_week" min="1" max="52" value="1" required>
+            </div>
+
+            <div class="field-actions">
+                <button class="btn primary">Simpan Tugas WBS →</button>
+            </div>
+        </form>
+    <?php endif; ?>
+</section>
+
+<script>
+function toggleScopeInputs() {
+    var scope = document.getElementById("taskScopeSelect")?.value;
+    var singleField = document.getElementById("singleGroupField");
+    var classField = document.getElementById("classField");
+    if (scope === "all_in_class") {
+        if (singleField) singleField.hidden = true;
+        if (classField) classField.hidden = false;
+    } else {
+        if (singleField) singleField.hidden = false;
+        if (classField) classField.hidden = true;
     }
-    echo '</section>';
 }
-layout_end();
+</script>
+
+<?php layout_end(); ?>
