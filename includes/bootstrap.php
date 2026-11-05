@@ -839,33 +839,27 @@ function layout_start(string $title, string $active = 'dashboard'): void
     $flash = take_flash();
     $teacher = is_teacher($user);
 
-    // Navigasi disesuaikan per peran pengguna sesuai instruksi
-    if ($teacher) {
-        $nav = [
-            'dashboard' => ['▦', 'Dashboard', 'dashboard.php'],
-            'classes' => ['▤', 'Kelas Saya', 'classes.php'],
-            'integrations' => ['↗', 'Integrasi Akun Google', 'integrations.php'],
-            'classroom' => ['◈', 'Monitoring', 'classroom.php'],
-            'reports' => ['⌁', 'Laporan', 'reports.php'],
-        ];
-    } else {
-        $nav = [
-            'dashboard' => ['▦', 'Dashboard', 'dashboard.php'],
-            'classes' => ['▤', 'Kelas Saya', 'classes.php'],
-            'integrations' => ['↗', 'Integrasi Akun Google', 'integrations.php'],
-            'teams' => ['♧', 'Kelompok Saya', 'teams.php'],
-            'tasks' => ['☷', 'Tugas', 'tasks.php'],
-            'contributions' => ['◈', 'Kontribusi', 'contributions.php'],
-        ];
-    }
+    $nav = [
+        'dashboard' => ['▦', 'Dashboard', 'dashboard.php'],
+        'contributions' => ['◈', 'Kontribusi Saya', 'contributions.php'],
+        'teams' => ['♧', 'Tim & Kelompok', 'teams.php'],
+        'classroom' => ['▤', 'Monitor Kelas', 'classroom.php'],
+        'tasks' => ['☷', 'WBS & Tugas', 'tasks.php'],
+        'audit' => ['⌁', 'Audit & Telemetry', 'audit.php'],
+        'reports' => ['▤', 'Laporan Audit', 'reports.php'],
+        'settings' => ['⚙', 'Pengaturan', 'settings.php'],
+    ];
 
-    echo '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . e($title) . ' · FairShare</title><link rel="stylesheet" href="assets/style.css?v=4"><script defer src="assets/app.js?v=4"></script></head><body>';
+    echo '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . e($title) . ' · FairShare</title><script>(function(){try{var t=localStorage.getItem("fairshare-theme");if(t)document.documentElement.dataset.theme=t;}catch(e){}})();</script><link rel="stylesheet" href="assets/style.css?v=5"><script defer src="assets/app.js?v=5"></script></head><body>';
     echo '<aside class="sidebar" id="sidebar"><a class="brand" href="dashboard.php"><span class="brand-mark brand-logo"><img src="assets/fairshare-logo.svg" alt=""></span><span>FairShare<small>COLLABORATION INTELLIGENCE</small></span></a><div class="nav-caption">WORKSPACE</div><nav class="nav">';
     foreach ($nav as $key => $item) {
+        if ($key === 'classroom' && !$teacher) {
+            continue;
+        }
         echo '<a class="' . ($active === $key ? 'active' : '') . '" href="' . $item[2] . '"><span class="nav-icon">' . $item[0] . '</span><span>' . $item[1] . '</span>' . ($active === $key ? '<i></i>' : '') . '</a>';
     }
-    echo '</nav><div class="sidebar-bottom"><div class="workspace-card"><span class="workspace-icon">✦</span><div><b>FairShare Academic</b><small>' . ($teacher ? 'Portal Dosen' : 'Portal Mahasiswa') . '</small></div><span class="online-dot"></span></div><div class="profile-mini"><span class="avatar">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span><div><b>' . e($user['name']) . '</b><small>' . e(ucfirst((string) ($user['role'] ?? 'mahasiswa'))) . '</small></div><a href="settings.php" title="Pengaturan">⚙</a></div></div></aside>';
-    echo '<div class="app-shell"><header class="topbar"><div class="topbar-left"><button class="mobile-menu" data-menu-toggle aria-label="Buka menu">☰</button><div><div class="breadcrumb">FAIRSHARE <span>/</span> ' . e(strtoupper($title)) . '</div><div class="topbar-sub">' . ($teacher ? 'Portal Dosen Pengampu & Monitoring Kolaborasi' : 'Workspace kontribusi dan transparansi kolaborasi mahasiswa') . '</div></div></div><div class="topbar-actions"><span class="system-status"><i></i> Sistem aktif</span><button class="theme-toggle" type="button" data-theme-toggle aria-label="Ganti tema" title="Ganti tema"><span class="theme-icon">☾</span><span class="theme-label">Dark mode</span></button>
+    echo '</nav><div class="sidebar-bottom"><div class="workspace-card"><span class="workspace-icon">✦</span><div><b>FairShare Academic</b><small>' . ($teacher ? 'Portal Dosen' : 'Portal Mahasiswa') . '</small></div><span class="online-dot"></span></div><div class="profile-mini"><span class="avatar">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span><div><b>' . e($user['name']) . '</b><small>' . e(ucfirst((string) ($user['role'] ?? 'mahasiswa'))) . '</small></div></div></div></aside>';
+    echo '<div class="app-shell"><header class="topbar"><div class="topbar-left"><button class="mobile-menu" data-menu-toggle aria-label="Buka menu">☰</button><div><div class="breadcrumb">FAIRSHARE <span>/</span> ' . e(strtoupper($title)) . '</div><div class="topbar-sub">' . ($teacher ? 'Portal Dosen Pengampu & Monitoring Kolaborasi' : 'Workspace kontribusi dan transparansi kolaborasi mahasiswa') . '</div></div></div><div class="topbar-actions"><span class="system-status"><i></i> Sistem aktif</span>
     <div class="notification-wrap" data-notification-root data-csrf="' . e(csrf_token()) . '">
     <button class="icon-btn notification-trigger" type="button" data-notification-toggle aria-label="Buka notifikasi" aria-expanded="false" aria-controls="notificationPanel">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -890,7 +884,98 @@ function layout_start(string $title, string $active = 'dashboard'): void
         <div class="notification-footer">Notifikasi akun FairShare</div>
     </section>
 </div>
-    <span class="avatar avatar-top">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span><div class="top-user"><b>' . e($user['name']) . '</b><small>' . e(ucfirst((string) ($user['role'] ?? 'mahasiswa'))) . '</small></div></div></header><main class="main-content">';
+    <div class="profile-menu" data-profile-menu>
+        <button class="profile-trigger"
+                type="button"
+                data-profile-toggle
+                aria-haspopup="menu"
+                aria-expanded="false"
+                aria-controls="profilePanel"
+                title="Menu profil">
+            <span class="avatar avatar-top">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span>
+            <span class="top-user">
+                <b>' . e($user['name']) . '</b>
+                <small>' . ($teacher ? 'Dosen' : 'Mahasiswa') . '</small>
+            </span>
+            <span class="profile-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="profile-dropdown"
+             id="profilePanel"
+             data-profile-panel
+             role="menu"
+             aria-label="Menu akun"
+             hidden>
+            <div class="profile-head">
+                <span class="avatar avatar-popup">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span>
+                <div class="profile-meta">
+                    <strong class="profile-name">' . e($user['name']) . '</strong>
+                    ' . (!empty($user['email']) ? '<span class="profile-email">' . e($user['email']) . '</span>' : '') . '
+                    <span class="profile-role-badge">' . ($teacher ? 'Dosen' : 'Mahasiswa') . '</span>
+                </div>
+            </div>
+            <div class="profile-divider"></div>
+            <nav class="profile-nav">
+                <a class="profile-item" role="menuitem" href="settings.php#akun">
+                    <span class="profile-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                            <circle cx="12" cy="7" r="4"/>
+                        </svg>
+                    </span>
+                    <span>Manage account</span>
+                </a>
+                ' . ($teacher ? '
+                <a class="profile-item" role="menuitem" href="audit.php">
+                    <span class="profile-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                        </svg>
+                    </span>
+                    <span>Activity</span>
+                </a>' : '
+                <a class="profile-item" role="menuitem" href="contributions.php">
+                    <span class="profile-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                        </svg>
+                    </span>
+                    <span>Activity</span>
+                </a>') . '
+                <a class="profile-item" role="menuitem" href="settings.php#preferensi">
+                    <span class="profile-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                    </span>
+                    <span>Pengaturan</span>
+                </a>
+                <button type="button" class="profile-item profile-theme-toggle" data-theme-toggle role="menuitem" aria-label="Ganti tema">
+                    <span class="profile-icon theme-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                        </svg>
+                    </span>
+                    <span class="theme-label">Mode gelap</span>
+                    <span class="theme-switch" aria-hidden="true"><span class="theme-switch-thumb"></span></span>
+                </button>
+            </nav>
+            <div class="profile-divider"></div>
+            <div class="profile-foot">
+                <a class="profile-item danger" role="menuitem" href="logout.php">
+                    <span class="profile-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                            <polyline points="16 17 21 12 16 7"/>
+                            <line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                    </span>
+                    <span>Keluar</span>
+                </a>
+            </div>
+        </div>
+    </div>
+    </div></header><main class="main-content">';
     if ($flash) {
         echo '<div class="flash ' . e($flash['type']) . '" data-flash>' . e($flash['message']) . '</div>';
     }

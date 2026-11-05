@@ -4,10 +4,16 @@ document.addEventListener("DOMContentLoaded", () => {
     document.documentElement.dataset.theme = theme;
     if (themeButton) {
       const dark = theme === "dark";
-      themeButton.querySelector(".theme-icon").textContent = dark ? "☀" : "☾";
-      themeButton.querySelector(".theme-label").textContent = dark
-        ? "Light mode"
-        : "Dark mode";
+      const icon = themeButton.querySelector(".theme-icon");
+      if (icon) {
+        icon.innerHTML = dark
+          ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>'
+          : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+      }
+      const label = themeButton.querySelector(".theme-label");
+      if (label) {
+        label.textContent = dark ? "Mode terang" : "Mode gelap";
+      }
       themeButton.setAttribute(
         "aria-label",
         dark ? "Aktifkan mode terang" : "Aktifkan mode gelap",
@@ -280,3 +286,59 @@ function toast(message) {
     setTimeout(() => el.remove(), 250);
   }, 2600);
 }
+
+
+// ==========================================
+// FAIRSHARE PROFILE MENU POP-UP (TOPBAR)
+// ==========================================
+(() => {
+  const root = document.querySelector("[data-profile-menu]");
+  if (!root) return;
+  const trigger = root.querySelector("[data-profile-toggle]");
+  const panel = root.querySelector("[data-profile-panel]");
+  if (!trigger || !panel) return;
+
+  const notifRoot = document.querySelector("[data-notification-root]");
+  const notifTrigger = notifRoot?.querySelector("[data-notification-toggle]");
+  const notifPanel = notifRoot?.querySelector("[data-notification-panel]");
+
+  const closeNotif = () => {
+    if (notifPanel && !notifPanel.hidden) {
+      notifPanel.hidden = true;
+      notifTrigger?.setAttribute("aria-expanded", "false");
+    }
+  };
+
+  const setOpen = (open) => {
+    if (open) closeNotif();
+    panel.hidden = !open;
+    trigger.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+
+  trigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setOpen(panel.hidden);
+  });
+
+  // When notification opens, close profile menu
+  if (notifTrigger) {
+    notifTrigger.addEventListener("click", () => {
+      if (!panel.hidden) {
+        setOpen(false);
+      }
+    });
+  }
+
+  document.addEventListener("click", (event) => {
+    if (!root.contains(event.target) && !panel.hidden) {
+      setOpen(false);
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !panel.hidden) {
+      setOpen(false);
+      trigger.focus();
+    }
+  });
+})();
