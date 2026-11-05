@@ -173,15 +173,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ");
 
                 $stmt->execute([
-                    'creator'        => (string) $user['id'],
-                    'name'           => $teamName,
-                    'class_name'     => $class['name'],
+                    'creator' => (string) $user['id'],
+                    'name' => $teamName,
+                    'class_name' => $class['name'],
                     'duration_weeks' => (int) ($class['duration_weeks'] ?? 16),
-                    'parent_id'      => $classId,
-                    'invite_code'    => $teamInviteCode,
-                    'description'    => $teamDesc !== '' ? $teamDesc : null,
-                    'semester'       => $class['semester'] ?? null,
-                    'academic_year'  => $class['academic_year'] ?? null,
+                    'parent_id' => $classId,
+                    'invite_code' => $teamInviteCode,
+                    'description' => $teamDesc !== '' ? $teamDesc : null,
+                    'semester' => $class['semester'] ?? null,
+                    'academic_year' => $class['academic_year'] ?? null,
                 ]);
 
                 $newTeamId = (string) $stmt->fetchColumn();
@@ -457,12 +457,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $targetWeek = max(1, (int) ($_POST['target_week'] ?? 1));
             $targetScope = (string) ($_POST['target_scope'] ?? 'all');
             $selectedTeamId = trim((string) ($_POST['selected_team_id'] ?? ''));
+            $taskType = (string) ($_POST['task_type'] ?? 'manual');
+            $dueInput = trim((string) ($_POST['due_at'] ?? ''));
+            $dueAt = null;
+            $dueDate = null;
 
             if ($title === '') {
                 $error = 'Judul tugas wajib diisi.';
             } elseif (mb_strlen($title) > 200) {
                 $error = 'Judul tugas maksimal 200 karakter.';
+            } elseif (!in_array($taskType, ['manual', 'gdocs', 'github'], true)) {
+                $error = 'Jenis pengerjaan tugas tidak valid.';
+            } elseif (!in_array($targetScope, ['all', 'single'], true)) {
+                $error = 'Lingkup penerima tugas tidak valid.';
+            } elseif ($targetWeek < 1 || $targetWeek > 52) {
+                $error = 'Target minggu harus berada pada rentang 1 sampai 52.';
+            } elseif ($dueInput !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/', $dueInput)) {
+                $error = 'Format deadline tidak valid.';
+            } elseif ($dueInput !== '' && (($dueDate = DateTimeImmutable::createFromFormat('!Y-m-d\TH:i', $dueInput, new DateTimeZone('Asia/Jakarta'))) === false || $dueDate->format('Y-m-d\TH:i') !== $dueInput)) {
+                $error = 'Tanggal deadline tidak valid.';
             } else {
+                if ($dueDate instanceof DateTimeImmutable) {
+                    $dueAt = $dueDate->format('Y-m-d H:i:s');
+                }
                 $recipientTeamIds = [];
 
                 if ($targetScope === 'all') {
@@ -489,51 +506,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $recipientTeamIds = [$selectedTeamId];
                 }
 
-                // Masukkan tugas terpisah untuk setiap kelompok penerima agar progres mandiri
+                // Satu batch ID menghubungkan salinan tugas yang dibagikan ke beberapa kelompok.
+                $batchId = (string) $pdo->query('SELECT gen_random_uuid()::text')->fetchColumn();
+                if (!valid_uuid($batchId)) {
+                    throw new RuntimeException('Database tidak menghasilkan ID batch tugas yang valid.');
+                }
+                $syncStatus = $taskType === 'manual' ? 'not_required' : 'not_connected';
+
+                // Satu record tugas per kelompok agar resource, progres, dan audit tetap terpisah.
                 $pdo->beginTransaction();
                 $insertTask = $pdo->prepare("
                     INSERT INTO public.tasks (
-                        id,
-                        group_id,
-                        assigned_user_id,
-                        title,
-                        description,
-                        weight,
-                        status,
-                        target_week,
-                        completed_at,
-                        created_at,
-                        updated_at
+                        id, group_id, assigned_user_id, title, description, weight,
+                        status, target_week, due_at, completed_at, task_type,
+                        assignment_batch_id, sync_status, created_at, updated_at
                     ) VALUES (
-                        gen_random_uuid(),
-                        CAST(:gid AS uuid),
-                        NULL,
-                        :title,
-                        :description,
-                        :weight,
-                        'todo',
-                        :target_week,
-                        NULL,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
+                        gen_random_uuid(), CAST(:gid AS uuid), NULL, :title, :description, :weight,
+                        'todo', :target_week, :due_at, NULL, :task_type,
+                        CAST(:batch_id AS uuid), :sync_status, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                     )
                 ");
 
                 foreach ($recipientTeamIds as $tid) {
                     $insertTask->execute([
-                        'gid'         => $tid,
-                        'title'       => $title,
+                        'gid' => $tid,
+                        'title' => $title,
                         'description' => $desc !== '' ? $desc : null,
-                        'weight'      => $weight,
+                        'weight' => $weight,
                         'target_week' => $targetWeek,
+                        'due_at' => $dueAt,
+                        'task_type' => $taskType,
+                        'batch_id' => $batchId,
+                        'sync_status' => $syncStatus,
                     ]);
                 }
 
                 $pdo->commit();
 
                 $countRecipients = count($recipientTeamIds);
-                log_activity('Tugas kelas dibuat', "$title untuk $countRecipients kelompok di {$class['name']}", 'success');
-                flash("Tugas <b>" . e($title) . "</b> berhasil dibagikan ke <b>$countRecipients</b> kelompok.");
+                log_activity('Tugas kelas dibuat', "$title untuk $countRecipients kelompok di {$class['name']} · " . strtoupper($taskType), 'success');
+                $resourceHint = $taskType === 'gdocs'
+                    ? ' Buka Detail / Audit pada masing-masing tugas untuk memasukkan link Google Docs.'
+                    : ($taskType === 'github' ? ' Buka Detail / Audit pada masing-masing tugas untuk memasukkan URL repository GitHub.' : '');
+                flash('Tugas "' . $title . '" berhasil dibagikan ke ' . $countRecipients . ' kelompok.' . $resourceHint);
                 redirect("class_detail.php?id=" . urlencode($classId) . "#tasks");
             }
         } elseif ($action === 'update_task_status') {
@@ -571,9 +586,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 WHERE id = CAST(:tid AS uuid)
             ");
             $update->execute([
-                'status'  => $newStatus,
+                'status' => $newStatus,
                 'is_done' => $newStatus,
-                'tid'     => $taskId,
+                'tid' => $taskId,
             ]);
 
             log_activity('Status tugas diubah', "Status tugas diubah menjadi " . ui_task_status($newStatus), 'success');
@@ -623,6 +638,11 @@ if (!$teacher) {
         }
     }
 }
+// Mahasiswa hanya melihat tugas kelompoknya sendiri; dosen melihat seluruh tugas kelas.
+$displayTasks = $teacher ? $tasks : array_values(array_filter($tasks, static function (array $task) use ($myTeamInClass): bool {
+    return $myTeamInClass !== null
+        && strtolower((string) $task['group_id']) === strtolower((string) $myTeamInClass['id']);
+}));
 
 layout_start($class['name'] . ' · Kelas', 'classes');
 ?>
@@ -635,7 +655,8 @@ layout_start($class['name'] . ' · Kelas', 'classes');
             <span class="pill blue-pill"><?= (int) ($class['duration_weeks'] ?? 16) ?> Minggu</span>
         </div>
         <h1 class="class-hero-title"><?= e($class['name']) ?></h1>
-        <p class="class-hero-desc"><?= e($class['description'] ?: 'Tidak ada deskripsi tambahan untuk kelas ini.') ?></p>
+        <p class="class-hero-desc"><?= e($class['description'] ?: 'Tidak ada deskripsi tambahan untuk kelas ini.') ?>
+        </p>
         <div class="class-hero-meta">
             <span>Dosen Pengampu: <b><?= e($class['lecturer_name'] ?? 'Dosen') ?></b></span>
             <span>·</span>
@@ -647,12 +668,8 @@ layout_start($class['name'] . ' · Kelas', 'classes');
             <div class="class-code-label">KODE UNDANGAN KELAS</div>
             <div class="class-code-value">
                 <code><?= e($class['invite_code']) ?></code>
-                <button
-                    class="btn secondary small"
-                    type="button"
-                    data-copy="<?= e($class['invite_code']) ?>"
-                    data-copy-message="Kode kelas <?= e($class['invite_code']) ?> disalin!"
-                    title="Salin kode kelas">
+                <button class="btn secondary small" type="button" data-copy="<?= e($class['invite_code']) ?>"
+                    data-copy-message="Kode kelas <?= e($class['invite_code']) ?> disalin!" title="Salin kode kelas">
                     ⧉ Salin
                 </button>
             </div>
@@ -701,9 +718,9 @@ layout_start($class['name'] . ' · Kelas', 'classes');
         ☷ Tugas & WBS (<?= $totalTasks ?>)
     </button>
     <?php if ($teacher): ?>
-    <button class="class-tab-btn" type="button" data-tab-target="tabMonitoring">
-        ◈ Monitoring Kelas
-    </button>
+        <button class="class-tab-btn" type="button" data-tab-target="tabMonitoring">
+            ◈ Monitoring Kelas
+        </button>
     <?php endif; ?>
 </div>
 
@@ -713,7 +730,8 @@ layout_start($class['name'] . ' · Kelas', 'classes');
         <div class="panel-heading">
             <div>
                 <div class="panel-title">Kelompok dalam Kelas</div>
-                <div class="panel-sub">Setiap kelompok memiliki satu Project Manager dan anggota mahasiswa terdaftar.</div>
+                <div class="panel-sub">Setiap kelompok memiliki satu Project Manager dan anggota mahasiswa terdaftar.
+                </div>
             </div>
             <div class="panel-actions">
                 <?php if ($teacher || (!$teacher && !$myTeamInClass)): ?>
@@ -732,18 +750,18 @@ layout_start($class['name'] . ' · Kelas', 'classes');
                     <?= $teacher
                         ? 'Bentuk kelompok untuk mahasiswa di kelas ini menggunakan tombol "+ Bentuk Kelompok".'
                         : 'Bentuk kelompok baru atau gabung ke kelompok teman menggunakan kode undangan kelompok.'
-                    ?>
+                        ?>
                 </p>
             </div>
         <?php else: ?>
             <div class="teams-container">
                 <?php foreach ($teams as $t): ?>
                     <?php
-                        $tMembers = $t['members'] ?? [];
-                        $tTasks = array_values(array_filter($tasks, fn($tk) => ($tk['group_id'] ?? '') === $t['id']));
-                        $tDone = count(array_filter($tTasks, fn($tk) => ($tk['status_db'] ?? '') === 'done'));
-                        $tRate = count($tTasks) > 0 ? round(($tDone / count($tTasks)) * 100) : 0;
-                        $pm = $t['project_manager'] ?? null;
+                    $tMembers = $t['members'] ?? [];
+                    $tTasks = array_values(array_filter($tasks, fn($tk) => ($tk['group_id'] ?? '') === $t['id']));
+                    $tDone = count(array_filter($tTasks, fn($tk) => ($tk['status_db'] ?? '') === 'done'));
+                    $tRate = count($tTasks) > 0 ? round(($tDone / count($tTasks)) * 100) : 0;
+                    $pm = $t['project_manager'] ?? null;
                     ?>
                     <article class="team-detail-card">
                         <div class="team-detail-head">
@@ -753,10 +771,7 @@ layout_start($class['name'] . ' · Kelas', 'classes');
                             </div>
                             <div class="team-invite-pill">
                                 <span>KODE TIM: <b><?= e($t['invite_code']) ?></b></span>
-                                <button
-                                    class="icon-btn small"
-                                    type="button"
-                                    data-copy="<?= e($t['invite_code']) ?>"
+                                <button class="icon-btn small" type="button" data-copy="<?= e($t['invite_code']) ?>"
                                     data-copy-message="Kode kelompok <?= e($t['invite_code']) ?> disalin!"
                                     title="Salin kode kelompok">
                                     ⧉
@@ -773,11 +788,7 @@ layout_start($class['name'] . ' · Kelas', 'classes');
                                 <?php endif; ?>
                             </span>
                             <?php if ($teacher && count($tMembers) > 1): ?>
-                                <button
-                                    class="btn secondary small"
-                                    type="button"
-                                    data-change-pm
-                                    data-team-id="<?= e($t['id']) ?>"
+                                <button class="btn secondary small" type="button" data-change-pm data-team-id="<?= e($t['id']) ?>"
                                     data-team-name="<?= e($t['name']) ?>"
                                     data-members='<?= json_encode(array_map(fn($m) => ['id' => $m['user_id'], 'name' => $m['name'], 'role' => $m['role_in_group']], $tMembers)) ?>'>
                                     Ganti PM
@@ -802,7 +813,8 @@ layout_start($class['name'] . ' · Kelas', 'classes');
                                             <?= $m['role_in_group'] === 'ketua' ? '<i>(PM)</i>' : '' ?>
                                         </span>
                                         <?php if ($teacher && $m['role_in_group'] !== 'ketua'): ?>
-                                            <form method="post" style="display:inline;" onsubmit="return confirm('Keluarkan <?= e($m['name']) ?> dari kelompok ini?');">
+                                            <form method="post" style="display:inline;"
+                                                onsubmit="return confirm('Keluarkan <?= e($m['name']) ?> dari kelompok ini?');">
                                                 <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
                                                 <input type="hidden" name="action" value="remove_team_member">
                                                 <input type="hidden" name="team_id" value="<?= e($t['id']) ?>">
@@ -817,12 +829,8 @@ layout_start($class['name'] . ' · Kelas', 'classes');
 
                         <?php if ($teacher): ?>
                             <div class="team-manage-strip">
-                                <button
-                                    class="btn secondary small"
-                                    type="button"
-                                    data-add-member-btn
-                                    data-team-id="<?= e($t['id']) ?>"
-                                    data-team-name="<?= e($t['name']) ?>">
+                                <button class="btn secondary small" type="button" data-add-member-btn
+                                    data-team-id="<?= e($t['id']) ?>" data-team-name="<?= e($t['name']) ?>">
                                     ＋ Tambah Anggota ke Kelompok Ini
                                 </button>
                             </div>
@@ -907,6 +915,7 @@ layout_start($class['name'] . ' · Kelas', 'classes');
                 <div class="panel-sub">Tugas dicatat dan dipantau secara terpisah per kelompok.</div>
             </div>
             <div class="panel-actions">
+                <a class="btn secondary" href="integrations.php">↗ Integrasi Akun Google</a>
                 <?php if ($teacher): ?>
                     <button class="btn primary" type="button" data-modal-open="createTaskModal">
                         ＋ Buat Tugas Kelas
@@ -915,11 +924,12 @@ layout_start($class['name'] . ' · Kelas', 'classes');
             </div>
         </div>
 
-        <?php if (!$tasks): ?>
+        <?php if (!$displayTasks): ?>
             <div class="empty-state">
                 <span class="empty-illustration">☷</span>
                 <b>Belum ada tugas di kelas ini</b>
-                <p><?= $teacher ? 'Klik tombol "+ Buat Tugas Kelas" untuk memberikan instruksi tugas kepada kelompok.' : 'Dosen belum membagikan tugas untuk kelompokmu.' ?></p>
+                <p><?= $teacher ? 'Klik tombol "+ Buat Tugas Kelas" untuk memberikan instruksi tugas kepada kelompok.' : 'Dosen belum membagikan tugas untuk kelompokmu.' ?>
+                </p>
             </div>
         <?php else: ?>
             <div class="table-wrap">
@@ -928,6 +938,8 @@ layout_start($class['name'] . ' · Kelas', 'classes');
                         <tr>
                             <th>Tugas</th>
                             <th>Kelompok</th>
+                            <th>Jenis</th>
+                            <th>Resource</th>
                             <th>Bobot</th>
                             <th>Target</th>
                             <th>Status</th>
@@ -935,9 +947,9 @@ layout_start($class['name'] . ' · Kelas', 'classes');
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($tasks as $tk): ?>
+                        <?php foreach ($displayTasks as $tk): ?>
                             <?php
-                                $canEditTask = $teacher || ($myTeamInClass && strtolower((string) $tk['group_id']) === strtolower((string) $myTeamInClass['id']));
+                            $canEditTask = $teacher || ($myTeamInClass && strtolower((string) $tk['group_id']) === strtolower((string) $myTeamInClass['id']));
                             ?>
                             <tr>
                                 <td>
@@ -947,28 +959,54 @@ layout_start($class['name'] . ' · Kelas', 'classes');
                                     <?php endif; ?>
                                 </td>
                                 <td><span class="pill blue-pill"><?= e($tk['group_name']) ?></span></td>
+                                <td>
+                                    <?php $taskType = (string) ($tk['task_type'] ?? 'manual'); ?>
+                                    <span
+                                        class="status-badge <?= $taskType === 'gdocs' ? 'doing' : ($taskType === 'github' ? 'good' : '') ?>">
+                                        <?= e(match ($taskType) { 'gdocs' => 'Google Docs', 'github' => 'GitHub', default => 'Manual'}) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <?php if (!empty($tk['resource_url'])): ?>
+                                        <a class="text-link" href="<?= e($tk['resource_url']) ?>" target="_blank"
+                                            rel="noopener noreferrer">Buka resource ↗</a>
+                                    <?php elseif ($taskType === 'gdocs'): ?>
+                                        <small class="muted">Link Docs belum ditambahkan</small>
+                                    <?php elseif ($taskType === 'github'): ?>
+                                        <small class="muted">Repository belum ditambahkan</small>
+                                    <?php else: ?>
+                                        <small class="muted">Tidak diperlukan</small>
+                                    <?php endif; ?>
+                                </td>
                                 <td><span class="task-tag"><?= e($tk['weight']) ?>×</span></td>
                                 <td><small>Minggu <?= (int) $tk['target_week'] ?></small></td>
                                 <td>
-                                    <span class="status-badge <?= $tk['status_db'] === 'done' ? 'good' : ($tk['status_db'] === 'in_progress' ? 'doing' : '') ?>">
+                                    <span
+                                        class="status-badge <?= $tk['status_db'] === 'done' ? 'good' : ($tk['status_db'] === 'in_progress' ? 'doing' : '') ?>">
                                         <?= e($tk['status']) ?>
                                     </span>
                                 </td>
                                 <td>
+                                    <?php if ($canEditTask): ?>
+                                        <a class="btn secondary small"
+                                            href="task_detail.php?id=<?= urlencode((string) $tk['id']) ?>">Detail / Audit →</a>
+                                    <?php endif; ?>
                                     <?php if ($canEditTask && !$teacher): ?>
-                                        <form method="post" style="display:inline;">
+                                        <form method="post" style="display:inline; margin-top:6px;">
                                             <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
                                             <input type="hidden" name="action" value="update_task_status">
                                             <input type="hidden" name="task_id" value="<?= e($tk['id']) ?>">
-                                            <select name="status" onchange="this.form.submit()" style="font-size:11px; padding:3px 6px;">
-                                                <option value="todo" <?= $tk['status_db'] === 'todo' ? 'selected' : '' ?>>Belum dikerjakan</option>
+                                            <select name="status" onchange="this.form.submit()"
+                                                style="font-size:11px; padding:3px 6px;">
+                                                <option value="todo" <?= $tk['status_db'] === 'todo' ? 'selected' : '' ?>>Belum
+                                                    dikerjakan</option>
                                                 <option value="in_progress" <?= $tk['status_db'] === 'in_progress' ? 'selected' : '' ?>>Dikerjakan</option>
-                                                <option value="review" <?= $tk['status_db'] === 'review' ? 'selected' : '' ?>>Review</option>
-                                                <option value="done" <?= $tk['status_db'] === 'done' ? 'selected' : '' ?>>Selesai</option>
+                                                <option value="review" <?= $tk['status_db'] === 'review' ? 'selected' : '' ?>>Review
+                                                </option>
+                                                <option value="done" <?= $tk['status_db'] === 'done' ? 'selected' : '' ?>>Selesai
+                                                </option>
                                             </select>
                                         </form>
-                                    <?php else: ?>
-                                        <small class="muted"><?= $tk['status_db'] === 'done' ? 'Tuntas' : 'Berjalan' ?></small>
                                     <?php endif; ?>
                                 </td>
                             </tr>
@@ -982,72 +1020,72 @@ layout_start($class['name'] . ' · Kelas', 'classes');
 
 <!-- TAB 4: MONITORING KELAS (DOSEN) -->
 <?php if ($teacher): ?>
-<section class="class-tab-pane" id="tabMonitoring">
-    <div class="panel">
-        <div class="panel-heading">
-            <div>
-                <div class="panel-title">Monitoring Progres & Transparansi Kelompok</div>
-                <div class="panel-sub">Pantau kinerja kelompok, penyelesaian tugas WBS, dan telemetri kontribusi.</div>
+    <section class="class-tab-pane" id="tabMonitoring">
+        <div class="panel">
+            <div class="panel-heading">
+                <div>
+                    <div class="panel-title">Monitoring Progres & Transparansi Kelompok</div>
+                    <div class="panel-sub">Pantau kinerja kelompok, penyelesaian tugas WBS, dan telemetri kontribusi.</div>
+                </div>
             </div>
-        </div>
 
-        <?php if (!$teams): ?>
-            <div class="empty-state">
-                <b>Belum ada data monitoring</b>
-                <p>Monitoring akan tersedia setelah kelompok terbentuk.</p>
-            </div>
-        <?php else: ?>
-            <div class="table-wrap">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Kelompok</th>
-                            <th>Project Manager</th>
-                            <th>Anggota</th>
-                            <th>Tugas Selesai</th>
-                            <th>Progres</th>
-                            <th>Aksi</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($teams as $tm): ?>
-                            <?php
+            <?php if (!$teams): ?>
+                <div class="empty-state">
+                    <b>Belum ada data monitoring</b>
+                    <p>Monitoring akan tersedia setelah kelompok terbentuk.</p>
+                </div>
+            <?php else: ?>
+                <div class="table-wrap">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Kelompok</th>
+                                <th>Project Manager</th>
+                                <th>Anggota</th>
+                                <th>Tugas Selesai</th>
+                                <th>Progres</th>
+                                <th>Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($teams as $tm): ?>
+                                <?php
                                 $tmTasks = array_values(array_filter($tasks, fn($tk) => ($tk['group_id'] ?? '') === $tm['id']));
                                 $tmDone = count(array_filter($tmTasks, fn($tk) => ($tk['status_db'] ?? '') === 'done'));
                                 $tmRate = count($tmTasks) > 0 ? round(($tmDone / count($tmTasks)) * 100) : 0;
                                 $pmInfo = $tm['project_manager'] ?? null;
-                            ?>
-                            <tr>
-                                <td>
-                                    <b><?= e($tm['name']) ?></b>
-                                    <small class="table-secondary">Kode: <?= e($tm['invite_code']) ?></small>
-                                </td>
-                                <td>
-                                    <b><?= e($pmInfo ? $pmInfo['name'] : '—') ?></b>
-                                </td>
-                                <td><?= count($tm['members'] ?? []) ?> mahasiswa</td>
-                                <td><?= $tmDone ?> / <?= count($tmTasks) ?> tugas</td>
-                                <td>
-                                    <div style="display:flex; align-items:center; gap:8px;">
-                                        <div class="mini-progress green-progress" style="width:90px;">
-                                            <span style="width:<?= $tmRate ?>%"></span>
+                                ?>
+                                <tr>
+                                    <td>
+                                        <b><?= e($tm['name']) ?></b>
+                                        <small class="table-secondary">Kode: <?= e($tm['invite_code']) ?></small>
+                                    </td>
+                                    <td>
+                                        <b><?= e($pmInfo ? $pmInfo['name'] : '—') ?></b>
+                                    </td>
+                                    <td><?= count($tm['members'] ?? []) ?> mahasiswa</td>
+                                    <td><?= $tmDone ?> / <?= count($tmTasks) ?> tugas</td>
+                                    <td>
+                                        <div style="display:flex; align-items:center; gap:8px;">
+                                            <div class="mini-progress green-progress" style="width:90px;">
+                                                <span style="width:<?= $tmRate ?>%"></span>
+                                            </div>
+                                            <small><b><?= $tmRate ?>%</b></small>
                                         </div>
-                                        <small><b><?= $tmRate ?>%</b></small>
-                                    </div>
-                                </td>
-                                <td>
-                                    <a class="btn secondary small" href="tasks.php?group=<?= urlencode($tm['id']) ?>">
-                                        Lihat Tugas →
-                                    </a>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        <?php endif; ?>
-    </div>
-</section>
+                                    </td>
+                                    <td>
+                                        <a class="btn secondary small" href="tasks.php?group=<?= urlencode($tm['id']) ?>">
+                                            Lihat Tugas →
+                                        </a>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+        </div>
+    </section>
 <?php endif; ?>
 
 <!-- MODAL BENTUK KELOMPOK -->
@@ -1070,18 +1108,21 @@ layout_start($class['name'] . ' · Kelas', 'classes');
                 </div>
                 <div class="form-group">
                     <label>Deskripsi Proyek Kelompok</label>
-                    <textarea name="description" rows="2" placeholder="Rencana proyek, topik aplikasi, atau pembagian peran..."></textarea>
+                    <textarea name="description" rows="2"
+                        placeholder="Rencana proyek, topik aplikasi, atau pembagian peran..."></textarea>
                 </div>
                 <div class="form-group">
                     <label>Pilih Project Manager (Ketua Kelompok) <span class="text-danger">*</span></label>
                     <select name="pm_user_id" required>
                         <?php if (!$teacher): ?>
-                            <option value="<?= e($user['id']) ?>" selected>Diri Saya Sendiri (<?= e($user['name']) ?>)</option>
+                            <option value="<?= e($user['id']) ?>" selected>Diri Saya Sendiri (<?= e($user['name']) ?>)
+                            </option>
                         <?php else: ?>
                             <option value="">-- Pilih Mahasiswa sebagai Project Manager --</option>
                         <?php endif; ?>
                         <?php foreach ($students as $s): ?>
-                            <?php if (!$teacher && strtolower((string) $s['user_id']) === strtolower((string) $user['id'])) continue; ?>
+                            <?php if (!$teacher && strtolower((string) $s['user_id']) === strtolower((string) $user['id']))
+                                continue; ?>
                             <option value="<?= e($s['user_id']) ?>">
                                 <?= e($s['name']) ?> (NIM: <?= e($s['nim_nip'] ?: '—') ?>)
                                 <?= !empty($s['team_name']) ? ' [Sudah di: ' . e($s['team_name']) . ']' : '' ?>
@@ -1093,7 +1134,8 @@ layout_start($class['name'] . ' · Kelas', 'classes');
                 <?php if ($teacher && count($unassignedStudents) > 0): ?>
                     <div class="form-group">
                         <label>Pilih Anggota Awal Lainnya (Opsional)</label>
-                        <div style="max-height:140px; overflow-y:auto; border:1px solid #ebebf4; border-radius:8px; padding:8px;">
+                        <div
+                            style="max-height:140px; overflow-y:auto; border:1px solid #ebebf4; border-radius:8px; padding:8px;">
                             <?php foreach ($unassignedStudents as $us): ?>
                                 <label style="display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:12px;">
                                     <input type="checkbox" name="initial_members[]" value="<?= e($us['user_id']) ?>">
@@ -1114,244 +1156,264 @@ layout_start($class['name'] . ' · Kelas', 'classes');
 
 <!-- MODAL GANTI PROJECT MANAGER (DOSEN) -->
 <?php if ($teacher): ?>
-<div class="modal-overlay" id="changePmModal" hidden>
-    <div class="modal-box">
-        <div class="modal-head">
-            <div>
-                <h3>Ganti Project Manager Kelompok</h3>
-                <small id="changePmTeamLabel">Kelompok</small>
-            </div>
-            <button class="modal-close" type="button" data-modal-close="changePmModal">✕</button>
-        </div>
-        <form method="post">
-            <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
-            <input type="hidden" name="action" value="change_pm">
-            <input type="hidden" name="team_id" id="changePmTeamId" value="">
-            <div class="modal-body">
-                <div class="form-group">
-                    <label>Pilih Project Manager Baru <span class="text-danger">*</span></label>
-                    <select name="new_pm_id" id="changePmSelect" required>
-                        <!-- Diisi via JS -->
-                    </select>
-                    <small class="muted" style="display:block; margin-top:6px;">
-                        Transaksi database akan secara otomatis mengalihkan ketua lama menjadi anggota dan anggota terpilih menjadi ketua baru.
-                    </small>
+    <div class="modal-overlay" id="changePmModal" hidden>
+        <div class="modal-box">
+            <div class="modal-head">
+                <div>
+                    <h3>Ganti Project Manager Kelompok</h3>
+                    <small id="changePmTeamLabel">Kelompok</small>
                 </div>
+                <button class="modal-close" type="button" data-modal-close="changePmModal">✕</button>
             </div>
-            <div class="modal-foot">
-                <button class="btn secondary" type="button" data-modal-close="changePmModal">Batal</button>
-                <button class="btn primary" type="submit">Simpan Pergantian PM</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<!-- MODAL TAMBAH ANGGOTA KE KELOMPOK (DOSEN) -->
-<div class="modal-overlay" id="addMemberModal" hidden>
-    <div class="modal-box">
-        <div class="modal-head">
-            <div>
-                <h3>Tambah Mahasiswa ke Kelompok</h3>
-                <small id="addMemberTeamLabel">Kelompok</small>
-            </div>
-            <button class="modal-close" type="button" data-modal-close="addMemberModal">✕</button>
-        </div>
-        <form method="post">
-            <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
-            <input type="hidden" name="action" value="add_team_member">
-            <input type="hidden" name="team_id" id="addMemberTeamId" value="">
-            <div class="modal-body">
-                <div class="form-group">
-                    <label>Pilih Mahasiswa Kelas <span class="text-danger">*</span></label>
-                    <select name="user_id" required>
-                        <option value="">-- Pilih Mahasiswa Kelas --</option>
-                        <?php foreach ($students as $s): ?>
-                            <option value="<?= e($s['user_id']) ?>">
-                                <?= e($s['name']) ?> (NIM: <?= e($s['nim_nip'] ?: '—') ?>)
-                                <?= !empty($s['team_name']) ? ' [Saat ini di: ' . e($s['team_name']) . ']' : ' [Belum ada kelompok]' ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <small class="muted" style="display:block; margin-top:6px;">
-                        Sistem hanya mengizinkan mahasiswa yang terdaftar di kelas ini dan belum tergabung di kelompok lain.
-                    </small>
-                </div>
-            </div>
-            <div class="modal-foot">
-                <button class="btn secondary" type="button" data-modal-close="addMemberModal">Batal</button>
-                <button class="btn primary" type="submit">Tambahkan Mahasiswa →</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<!-- MODAL BUAT TUGAS KELAS (DOSEN) -->
-<div class="modal-overlay" id="createTaskModal" hidden>
-    <div class="modal-box">
-        <div class="modal-head">
-            <div>
-                <h3>Buat Tugas Kelas</h3>
-                <small>Tugas dapat dibagikan kepada seluruh kelompok atau kelompok tertentu.</small>
-            </div>
-            <button class="modal-close" type="button" data-modal-close="createTaskModal">✕</button>
-        </div>
-        <form method="post">
-            <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
-            <input type="hidden" name="action" value="create_task">
-            <div class="modal-body">
-                <div class="form-group">
-                    <label>Judul Tugas WBS <span class="text-danger">*</span></label>
-                    <input name="title" required maxlength="200" placeholder="Contoh: Modul Otentikasi dan Desain Basis Data">
-                </div>
-                <div class="form-group">
-                    <label>Deskripsi atau Instruksi Pengerjaan</label>
-                    <textarea name="description" rows="3" placeholder="Jelaskan deliverable, kriteria kelulusan, atau instruksi..."></textarea>
-                </div>
-                <div class="form-row-2">
+            <form method="post">
+                <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
+                <input type="hidden" name="action" value="change_pm">
+                <input type="hidden" name="team_id" id="changePmTeamId" value="">
+                <div class="modal-body">
                     <div class="form-group">
-                        <label>Bobot Kesulitan (1–5)</label>
-                        <select name="weight">
-                            <option value="1">1 - Sangat Ringan</option>
-                            <option value="2">2 - Ringan</option>
-                            <option value="3" selected>3 - Sedang</option>
-                            <option value="4">4 - Berat</option>
-                            <option value="5">5 - Sangat Kompleks</option>
+                        <label>Pilih Project Manager Baru <span class="text-danger">*</span></label>
+                        <select name="new_pm_id" id="changePmSelect" required>
+                            <!-- Diisi via JS -->
                         </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Target Minggu Ke-</label>
-                        <input type="number" name="target_week" min="1" max="52" value="1" required>
+                        <small class="muted" style="display:block; margin-top:6px;">
+                            Transaksi database akan secara otomatis mengalihkan ketua lama menjadi anggota dan anggota
+                            terpilih menjadi ketua baru.
+                        </small>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label>Kelompok Penerima Tugas <span class="text-danger">*</span></label>
-                    <div style="margin-bottom:8px;">
-                        <label style="margin-right:16px;">
-                            <input type="radio" name="target_scope" value="all" checked onchange="document.getElementById('teamSelectRow').hidden = true;">
-                            Semua Kelompok di Kelas (<?= $totalTeams ?> kelompok)
-                        </label>
-                        <label>
-                            <input type="radio" name="target_scope" value="single" onchange="document.getElementById('teamSelectRow').hidden = false;">
-                            Kelompok Tertentu
-                        </label>
-                    </div>
-                    <div id="teamSelectRow" hidden>
-                        <select name="selected_team_id">
-                            <option value="">-- Pilih Kelompok Penerima --</option>
-                            <?php foreach ($teams as $t): ?>
-                                <option value="<?= e($t['id']) ?>"><?= e($t['name']) ?></option>
+                <div class="modal-foot">
+                    <button class="btn secondary" type="button" data-modal-close="changePmModal">Batal</button>
+                    <button class="btn primary" type="submit">Simpan Pergantian PM</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL TAMBAH ANGGOTA KE KELOMPOK (DOSEN) -->
+    <div class="modal-overlay" id="addMemberModal" hidden>
+        <div class="modal-box">
+            <div class="modal-head">
+                <div>
+                    <h3>Tambah Mahasiswa ke Kelompok</h3>
+                    <small id="addMemberTeamLabel">Kelompok</small>
+                </div>
+                <button class="modal-close" type="button" data-modal-close="addMemberModal">✕</button>
+            </div>
+            <form method="post">
+                <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
+                <input type="hidden" name="action" value="add_team_member">
+                <input type="hidden" name="team_id" id="addMemberTeamId" value="">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Pilih Mahasiswa Kelas <span class="text-danger">*</span></label>
+                        <select name="user_id" required>
+                            <option value="">-- Pilih Mahasiswa Kelas --</option>
+                            <?php foreach ($students as $s): ?>
+                                <option value="<?= e($s['user_id']) ?>">
+                                    <?= e($s['name']) ?> (NIM: <?= e($s['nim_nip'] ?: '—') ?>)
+                                    <?= !empty($s['team_name']) ? ' [Saat ini di: ' . e($s['team_name']) . ']' : ' [Belum ada kelompok]' ?>
+                                </option>
                             <?php endforeach; ?>
                         </select>
+                        <small class="muted" style="display:block; margin-top:6px;">
+                            Sistem hanya mengizinkan mahasiswa yang terdaftar di kelas ini dan belum tergabung di kelompok
+                            lain.
+                        </small>
                     </div>
-                    <small class="muted" style="display:block; margin-top:6px;">
-                        Jika memilih "Semua Kelompok", sistem akan mencatat satu record tugas terpisah untuk setiap kelompok agar progres masing-masing tidak saling mengganggu.
-                    </small>
                 </div>
-            </div>
-            <div class="modal-foot">
-                <button class="btn secondary" type="button" data-modal-close="createTaskModal">Batal</button>
-                <button class="btn primary" type="submit">Bagikan Tugas →</button>
-            </div>
-        </form>
+                <div class="modal-foot">
+                    <button class="btn secondary" type="button" data-modal-close="addMemberModal">Batal</button>
+                    <button class="btn primary" type="submit">Tambahkan Mahasiswa →</button>
+                </div>
+            </form>
+        </div>
     </div>
-</div>
+
+    <!-- MODAL BUAT TUGAS KELAS (DOSEN) -->
+    <div class="modal-overlay" id="createTaskModal" hidden>
+        <div class="modal-box">
+            <div class="modal-head">
+                <div>
+                    <h3>Buat Tugas Kelas</h3>
+                    <small>Tugas dapat dibagikan kepada seluruh kelompok atau kelompok tertentu.</small>
+                </div>
+                <button class="modal-close" type="button" data-modal-close="createTaskModal">✕</button>
+            </div>
+            <form method="post">
+                <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
+                <input type="hidden" name="action" value="create_task">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Judul Tugas WBS <span class="text-danger">*</span></label>
+                        <input name="title" required maxlength="200"
+                            placeholder="Contoh: Modul Otentikasi dan Desain Basis Data">
+                    </div>
+                    <div class="form-group">
+                        <label>Deskripsi atau Instruksi Pengerjaan</label>
+                        <textarea name="description" rows="3"
+                            placeholder="Jelaskan deliverable, kriteria kelulusan, atau instruksi..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Jenis Pengerjaan <span class="text-danger">*</span></label>
+                        <select name="task_type" required>
+                            <option value="gdocs">Google Docs — dokumen/laporan</option>
+                            <option value="github">GitHub — coding/repository</option>
+                            <option value="manual">Manual — tanpa integrasi eksternal</option>
+                        </select>
+                        <small class="muted">Setelah tugas dibuat, buka Detail / Audit untuk memasukkan link Google Docs
+                            atau repository setiap kelompok.</small>
+                    </div>
+                    <div class="form-row-2">
+                        <div class="form-group">
+                            <label>Bobot Kesulitan (1–5)</label>
+                            <select name="weight">
+                                <option value="1">1 - Sangat Ringan</option>
+                                <option value="2">2 - Ringan</option>
+                                <option value="3" selected>3 - Sedang</option>
+                                <option value="4">4 - Berat</option>
+                                <option value="5">5 - Sangat Kompleks</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Target Minggu Ke-</label>
+                            <input type="number" name="target_week" min="1" max="52" value="1" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Deadline (opsional, WIB)</label>
+                        <input type="datetime-local" name="due_at">
+                    </div>
+                    <div class="form-group">
+                        <label>Kelompok Penerima Tugas <span class="text-danger">*</span></label>
+                        <div style="margin-bottom:8px;">
+                            <label style="margin-right:16px;">
+                                <input type="radio" name="target_scope" value="all" checked
+                                    onchange="document.getElementById('teamSelectRow').hidden = true;">
+                                Semua Kelompok di Kelas (<?= $totalTeams ?> kelompok)
+                            </label>
+                            <label>
+                                <input type="radio" name="target_scope" value="single"
+                                    onchange="document.getElementById('teamSelectRow').hidden = false;">
+                                Kelompok Tertentu
+                            </label>
+                        </div>
+                        <div id="teamSelectRow" hidden>
+                            <select name="selected_team_id">
+                                <option value="">-- Pilih Kelompok Penerima --</option>
+                                <?php foreach ($teams as $t): ?>
+                                    <option value="<?= e($t['id']) ?>"><?= e($t['name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <small class="muted" style="display:block; margin-top:6px;">
+                            Jika memilih "Semua Kelompok", sistem akan mencatat satu record tugas terpisah untuk setiap
+                            kelompok agar progres masing-masing tidak saling mengganggu.
+                        </small>
+                    </div>
+                </div>
+                <div class="modal-foot">
+                    <button class="btn secondary" type="button" data-modal-close="createTaskModal">Batal</button>
+                    <button class="btn primary" type="submit">Bagikan Tugas →</button>
+                </div>
+            </form>
+        </div>
+    </div>
 <?php endif; ?>
 
 <script>
-document.addEventListener("DOMContentLoaded", function() {
-    // Tab switching
-    var tabBtns = document.querySelectorAll(".class-tab-btn");
-    var tabPanes = document.querySelectorAll(".class-tab-pane");
+    document.addEventListener("DOMContentLoaded", function () {
+        // Tab switching
+        var tabBtns = document.querySelectorAll(".class-tab-btn");
+        var tabPanes = document.querySelectorAll(".class-tab-pane");
 
-    tabBtns.forEach(function(btn) {
-        btn.addEventListener("click", function() {
-            var targetId = btn.getAttribute("data-tab-target");
+        tabBtns.forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var targetId = btn.getAttribute("data-tab-target");
 
-            tabBtns.forEach(function(b) { b.classList.remove("active"); });
-            tabPanes.forEach(function(p) { p.classList.remove("active"); });
+                tabBtns.forEach(function (b) { b.classList.remove("active"); });
+                tabPanes.forEach(function (p) { p.classList.remove("active"); });
 
-            btn.classList.add("active");
-            var pane = document.getElementById(targetId);
-            if (pane) {
-                pane.classList.add("active");
-            }
-        });
-    });
-
-    // Check hash URL
-    if (window.location.hash) {
-        var hash = window.location.hash.replace('#', '');
-        if (hash === 'teams') {
-            document.querySelector("[data-tab-target='tabTeams']")?.click();
-        } else if (hash === 'students') {
-            document.querySelector("[data-tab-target='tabStudents']")?.click();
-        } else if (hash === 'tasks') {
-            document.querySelector("[data-tab-target='tabTasks']")?.click();
-        } else if (hash === 'monitoring') {
-            document.querySelector("[data-tab-target='tabMonitoring']")?.click();
-        }
-    }
-
-    // Modal open/close
-    document.querySelectorAll("[data-modal-open]").forEach(function(btn) {
-        btn.addEventListener("click", function() {
-            var modalId = btn.getAttribute("data-modal-open");
-            var modal = document.getElementById(modalId);
-            if (modal) modal.hidden = false;
-        });
-    });
-
-    document.querySelectorAll("[data-modal-close]").forEach(function(btn) {
-        btn.addEventListener("click", function() {
-            var modalId = btn.getAttribute("data-modal-close");
-            var modal = document.getElementById(modalId);
-            if (modal) modal.hidden = true;
-        });
-    });
-
-    document.querySelectorAll(".modal-overlay").forEach(function(overlay) {
-        overlay.addEventListener("click", function(e) {
-            if (e.target === overlay) overlay.hidden = true;
-        });
-    });
-
-    // Ganti PM button
-    document.querySelectorAll("[data-change-pm]").forEach(function(btn) {
-        btn.addEventListener("click", function() {
-            var teamId = btn.getAttribute("data-team-id");
-            var teamName = btn.getAttribute("data-team-name");
-            var members = JSON.parse(btn.getAttribute("data-members") || "[]");
-
-            document.getElementById("changePmTeamId").value = teamId;
-            document.getElementById("changePmTeamLabel").textContent = "Kelompok: " + teamName;
-
-            var select = document.getElementById("changePmSelect");
-            select.innerHTML = "";
-            members.forEach(function(m) {
-                var opt = document.createElement("option");
-                opt.value = m.id;
-                opt.textContent = m.name + (m.role === "ketua" ? " (PM Saat Ini)" : "");
-                if (m.role === "ketua") opt.disabled = true;
-                select.appendChild(opt);
+                btn.classList.add("active");
+                var pane = document.getElementById(targetId);
+                if (pane) {
+                    pane.classList.add("active");
+                }
             });
+        });
 
-            document.getElementById("changePmModal").hidden = false;
+        // Check hash URL
+        if (window.location.hash) {
+            var hash = window.location.hash.replace('#', '');
+            if (hash === 'teams') {
+                document.querySelector("[data-tab-target='tabTeams']")?.click();
+            } else if (hash === 'students') {
+                document.querySelector("[data-tab-target='tabStudents']")?.click();
+            } else if (hash === 'tasks') {
+                document.querySelector("[data-tab-target='tabTasks']")?.click();
+            } else if (hash === 'monitoring') {
+                document.querySelector("[data-tab-target='tabMonitoring']")?.click();
+            }
+        }
+
+        // Modal open/close
+        document.querySelectorAll("[data-modal-open]").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var modalId = btn.getAttribute("data-modal-open");
+                var modal = document.getElementById(modalId);
+                if (modal) modal.hidden = false;
+            });
+        });
+
+        document.querySelectorAll("[data-modal-close]").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var modalId = btn.getAttribute("data-modal-close");
+                var modal = document.getElementById(modalId);
+                if (modal) modal.hidden = true;
+            });
+        });
+
+        document.querySelectorAll(".modal-overlay").forEach(function (overlay) {
+            overlay.addEventListener("click", function (e) {
+                if (e.target === overlay) overlay.hidden = true;
+            });
+        });
+
+        // Ganti PM button
+        document.querySelectorAll("[data-change-pm]").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var teamId = btn.getAttribute("data-team-id");
+                var teamName = btn.getAttribute("data-team-name");
+                var members = JSON.parse(btn.getAttribute("data-members") || "[]");
+
+                document.getElementById("changePmTeamId").value = teamId;
+                document.getElementById("changePmTeamLabel").textContent = "Kelompok: " + teamName;
+
+                var select = document.getElementById("changePmSelect");
+                select.innerHTML = "";
+                members.forEach(function (m) {
+                    var opt = document.createElement("option");
+                    opt.value = m.id;
+                    opt.textContent = m.name + (m.role === "ketua" ? " (PM Saat Ini)" : "");
+                    if (m.role === "ketua") opt.disabled = true;
+                    select.appendChild(opt);
+                });
+
+                document.getElementById("changePmModal").hidden = false;
+            });
+        });
+
+        // Tambah anggota button
+        document.querySelectorAll("[data-add-member-btn]").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var teamId = btn.getAttribute("data-team-id");
+                var teamName = btn.getAttribute("data-team-name");
+
+                document.getElementById("addMemberTeamId").value = teamId;
+                document.getElementById("addMemberTeamLabel").textContent = "Menambahkan ke kelompok: " + teamName;
+                document.getElementById("addMemberModal").hidden = false;
+            });
         });
     });
-
-    // Tambah anggota button
-    document.querySelectorAll("[data-add-member-btn]").forEach(function(btn) {
-        btn.addEventListener("click", function() {
-            var teamId = btn.getAttribute("data-team-id");
-            var teamName = btn.getAttribute("data-team-name");
-
-            document.getElementById("addMemberTeamId").value = teamId;
-            document.getElementById("addMemberTeamLabel").textContent = "Menambahkan ke kelompok: " + teamName;
-            document.getElementById("addMemberModal").hidden = false;
-        });
-    });
-});
 </script>
 
 <?php layout_end(); ?>
-
