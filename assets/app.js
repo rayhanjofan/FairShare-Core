@@ -280,34 +280,3 @@ function toast(message) {
     setTimeout(() => el.remove(), 250);
   }, 2600);
 }
-
-// Menu profil (pojok kanan atas): buka/tutup dropdown Keluar
-(() => {
-  const root = document.querySelector("[data-profile-menu]");
-  if (!root) return;
-  const trigger = root.querySelector("[data-profile-toggle]");
-  const panel = root.querySelector("[data-profile-panel]");
-  if (!trigger || !panel) return;
-
-  const setOpen = (open) => {
-    panel.hidden = !open;
-    trigger.setAttribute("aria-expanded", open ? "true" : "false");
-  };
-
-  trigger.addEventListener("click", (event) => {
-    event.stopPropagation();
-    setOpen(panel.hidden);
-  });
-
-  document.addEventListener("click", (event) => {
-    if (!root.contains(event.target)) setOpen(false);
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !panel.hidden) {
-      setOpen(false);
-      trigger.focus();
-    }
-  });
-})();
- 
