@@ -1,17 +1,17 @@
 <?php
 declare(strict_types=1);
- 
+
 if (session_status() !== PHP_SESSION_ACTIVE) {
     session_start();
 }
- 
+
 define('APP_NAME', 'FairShare');
 define('BASE_PATH', dirname(__DIR__));
 define('DATA_PATH', BASE_PATH . '/data');
 if (!is_dir(DATA_PATH)) {
     mkdir(DATA_PATH, 0775, true);
 }
- 
+
 /** Keep page-level failures user-friendly; details go to PHP error log, never the browser. */
 set_exception_handler(function (Throwable $e): void {
     error_log('FairShare uncaught error: ' . $e->getMessage());
@@ -26,18 +26,18 @@ set_exception_handler(function (Throwable $e): void {
         . '<p><a href="healthcheck.php">Buka pemeriksaan koneksi</a></p></body></html>';
     exit;
 });
- 
+
 function e(mixed $value): string
 {
     return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
 }
- 
+
 function redirect(string $path): never
 {
     header('Location: ' . $path);
     exit;
 }
- 
+
 function read_data(string $file, array $fallback = []): array
 {
     $path = DATA_PATH . '/' . basename($file);
@@ -48,7 +48,7 @@ function read_data(string $file, array $fallback = []): array
     $data = json_decode($raw ?: '', true);
     return is_array($data) ? $data : $fallback;
 }
- 
+
 function write_data(string $file, array $data): bool
 {
     $path = DATA_PATH . '/' . basename($file);
@@ -58,7 +58,7 @@ function write_data(string $file, array $data): bool
     }
     return file_put_contents($path, $json . PHP_EOL, LOCK_EX) !== false;
 }
- 
+
 /** Read a single key from data/.env without exposing the full configuration. */
 function app_env(string $key, string $default = ''): string
 {
@@ -78,13 +78,13 @@ function app_env(string $key, string $default = ''): string
     }
     return $default;
 }
- 
+
 function fairshare_pdo(): ?PDO
 {
     require_once BASE_PATH . '/data/db.php';
     return fairshare_db();
 }
- 
+
 function require_db(): PDO
 {
     $pdo = fairshare_pdo();
@@ -93,12 +93,12 @@ function require_db(): PDO
     }
     return $pdo;
 }
- 
+
 function current_user(): ?array
 {
     return isset($_SESSION['user']) && is_array($_SESSION['user']) ? $_SESSION['user'] : null;
 }
- 
+
 function require_login(): array
 {
     $user = current_user();
@@ -107,7 +107,7 @@ function require_login(): array
     }
     return $user;
 }
- 
+
 function csrf_token(): string
 {
     if (empty($_SESSION['csrf'])) {
@@ -115,7 +115,7 @@ function csrf_token(): string
     }
     return $_SESSION['csrf'];
 }
- 
+
 function verify_csrf(): void
 {
     $token = $_POST['csrf'] ?? '';
@@ -124,19 +124,19 @@ function verify_csrf(): void
         exit('Sesi formulir kedaluwarsa. Muat ulang halaman lalu coba lagi.');
     }
 }
- 
+
 function flash(string $message, string $type = 'success'): void
 {
     $_SESSION['flash'] = ['message' => $message, 'type' => $type];
 }
- 
+
 function take_flash(): ?array
 {
     $f = $_SESSION['flash'] ?? null;
     unset($_SESSION['flash']);
     return $f;
 }
- 
+
 /** Local UI audit notes only. Core FairShare entities are stored in PostgreSQL. */
 function log_activity(string $title, string $detail, string $type = 'info'): void
 {
@@ -151,7 +151,7 @@ function log_activity(string $title, string $detail, string $type = 'info'): voi
     ]);
     write_data('activity.json', array_slice($logs, 0, 500));
 }
- 
+
 /**
  * Mengirim notifikasi kepada pengguna tertentu.
  * $category: info, success, warning, task, atau system.
@@ -166,16 +166,16 @@ function send_notification(
     if (!valid_uuid($recipientId)) {
         throw new InvalidArgumentException('ID penerima notifikasi tidak valid.');
     }
- 
+
     if ($senderId !== null && !valid_uuid($senderId)) {
         throw new InvalidArgumentException('ID pengirim notifikasi tidak valid.');
     }
- 
+
     $allowedCategories = ['info', 'success', 'warning', 'task', 'system'];
     if (!in_array($category, $allowedCategories, true)) {
         $category = 'info';
     }
- 
+
     $pdo = require_db();
     $stmt = $pdo->prepare("
         INSERT INTO public.notifications (
@@ -192,7 +192,7 @@ function send_notification(
             :category
         )
     ");
- 
+
     $stmt->execute([
         'recipient_id' => $recipientId,
         'sender_id' => $senderId,
@@ -201,18 +201,18 @@ function send_notification(
         'category' => $category
     ]);
 }
- 
+
 function valid_uuid(string $value): bool
 {
     return (bool) preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', trim($value));
 }
- 
+
 function is_teacher(?array $user = null): bool
 {
     $user = $user ?? current_user();
     return in_array(($user['role'] ?? 'mahasiswa'), ['dosen', 'admin'], true);
 }
- 
+
 /**
  * Hasilkan kode undangan unik dan acak untuk kelas atau kelompok (contoh: PBO-A8K29X, TIM-W7D8Q2).
  */
@@ -226,7 +226,7 @@ function generate_unique_invite_code(PDO $pdo, string $prefix = 'CLS'): string
     if ($cleanPrefix === '') {
         $cleanPrefix = 'FS';
     }
- 
+
     for ($attempt = 0; $attempt < 100; $attempt++) {
         $random = '';
         for ($i = 0; $i < 6; $i++) {
@@ -241,11 +241,11 @@ function generate_unique_invite_code(PDO $pdo, string $prefix = 'CLS'): string
     }
     throw new RuntimeException('Gagal menghasilkan kode undangan unik.');
 }
- 
+
 // ============================================================
 // FUNGSI PENGELOLAAN KELAS (group_type = 'class')
 // ============================================================
- 
+
 /**
  * Mengambil daftar kelas. Jika $dosenId diberikan, hanya kelas buatan dosen tersebut.
  */
@@ -282,12 +282,12 @@ function all_classes(?string $dosenId = null): array
         $params['dosen_id'] = $dosenId;
     }
     $sql .= " ORDER BY g.created_at DESC";
- 
+
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
- 
+
 /**
  * Mengambil daftar kelas yang diikuti mahasiswa.
  */
@@ -324,7 +324,7 @@ function user_classes(string $userId): array
     $stmt->execute(['uid' => $userId]);
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
- 
+
 /**
  * Kelas yang dapat dilihat pengguna sesuai rolenya.
  */
@@ -336,7 +336,7 @@ function visible_classes(array $user): array
     }
     return user_classes($uid);
 }
- 
+
 /**
  * Ambil satu kelas berdasarkan ID UUID.
  */
@@ -372,7 +372,7 @@ function class_by_id(string $classId): ?array
     $res = $stmt->fetch(PDO::FETCH_ASSOC);
     return $res ?: null;
 }
- 
+
 /**
  * Cari kelas berdasarkan kode undangan.
  */
@@ -402,7 +402,7 @@ function class_by_invite_code(string $code): ?array
     $res = $stmt->fetch(PDO::FETCH_ASSOC);
     return $res ?: null;
 }
- 
+
 /**
  * Ambil daftar mahasiswa terdaftar di suatu kelas beserta nama kelompoknya (jika sudah ada).
  */
@@ -440,7 +440,7 @@ function class_members(string $classId): array
     $stmt->execute(['class_id' => $classId, 'class_id2' => $classId]);
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
- 
+
 /**
  * Ambil daftar kelompok dalam suatu kelas.
  */
@@ -452,7 +452,7 @@ function class_teams(string $classId): array
     $all = all_groups();
     return array_values(array_filter($all, fn($g) => ($g['parent_group_id'] ?? '') === $classId));
 }
- 
+
 /**
  * Ambil seluruh tugas kelompok dalam suatu kelas.
  */
@@ -473,6 +473,15 @@ function class_tasks(string $classId): array
             t.status,
             t.target_week,
             t.completed_at::text AS completed_at,
+            t.task_type,
+            t.due_at::text AS due_at,
+            t.assignment_batch_id::text AS assignment_batch_id,
+            t.resource_url,
+            t.external_resource_id,
+            t.resource_title,
+            t.sync_status,
+            t.last_synced_at::text AS last_synced_at,
+            t.sync_error,
             t.created_at::text AS created_at,
             t.updated_at::text AS updated_at,
             g.name AS group_name,
@@ -493,11 +502,11 @@ function class_tasks(string $classId): array
     unset($r);
     return $rows;
 }
- 
+
 // ============================================================
 // FUNGSI PENGELOLAAN KELOMPOK (group_type = 'team')
 // ============================================================
- 
+
 /**
  * Mengambil semua kelompok (team). Tidak termasuk kelas (class).
  */
@@ -529,7 +538,7 @@ function all_groups(): array
         WHERE g.group_type = 'team'
         ORDER BY g.created_at DESC
     ")->fetchAll(PDO::FETCH_ASSOC);
- 
+
     $byId = [];
     foreach ($rows as $r) {
         $r['course'] = $r['parent_class_name'] ?: ($r['class_name'] ?: 'PBL');
@@ -541,7 +550,7 @@ function all_groups(): array
     if (!$byId) {
         return [];
     }
- 
+
     $memberRows = $pdo->query("
         SELECT
             gm.group_id::text AS group_id,
@@ -558,7 +567,7 @@ function all_groups(): array
         WHERE g.group_type = 'team'
         ORDER BY CASE WHEN gm.role_in_group = 'ketua' THEN 0 ELSE 1 END, gm.joined_at ASC
     ")->fetchAll(PDO::FETCH_ASSOC);
- 
+
     foreach ($memberRows as $m) {
         $key = strtolower($m['group_id']);
         if (!isset($byId[$key])) {
@@ -582,7 +591,7 @@ function all_groups(): array
     }
     return array_values($byId);
 }
- 
+
 /**
  * Mengambil kelompok yang diikuti oleh mahasiswa.
  */
@@ -601,7 +610,7 @@ function user_groups(string $userId): array
         return false;
     }));
 }
- 
+
 /**
  * Kelompok yang terlihat oleh pengguna.
  * Jika Dosen: hanya kelompok dari kelas yang dimiliki dosen tersebut.
@@ -620,12 +629,12 @@ function visible_groups(array $user): array
     }
     return user_groups($uid);
 }
- 
+
 function group_invite_code(array $group): string
 {
     return (string) ($group['invite_code'] ?? $group['id'] ?? '');
 }
- 
+
 /**
  * Memeriksa apakah pengguna memiliki hak mengelola kelompok (Dosen pemilik kelas atau Ketua/PM kelompok).
  */
@@ -650,7 +659,7 @@ function can_manage_group(array $group, array $user): bool
     }
     return false;
 }
- 
+
 function group_by_id(string $id): ?array
 {
     if (!valid_uuid($id)) {
@@ -664,7 +673,7 @@ function group_by_id(string $id): ?array
     }
     return null;
 }
- 
+
 /**
  * Cari kelompok berdasarkan kode undangan.
  */
@@ -681,11 +690,11 @@ function team_by_invite_code(string $code): ?array
     }
     return null;
 }
- 
+
 // ============================================================
 // FUNGSI TUGAS & TELEMETRY
 // ============================================================
- 
+
 function db_task_status(string $label): string
 {
     return match ($label) {
@@ -696,7 +705,7 @@ function db_task_status(string $label): string
         default => 'todo'
     };
 }
- 
+
 function ui_task_status(string $status): string
 {
     return match ($status) {
@@ -707,7 +716,7 @@ function ui_task_status(string $status): string
         default => $status
     };
 }
- 
+
 function all_tasks(): array
 {
     $sql = "
@@ -741,13 +750,13 @@ function all_tasks(): array
     unset($r);
     return $rows;
 }
- 
+
 function user_tasks(string $userId): array
 {
     $groupIds = array_column(user_groups($userId), 'id');
     return array_values(array_filter(all_tasks(), fn($t) => in_array((string) ($t['group_id'] ?? ''), $groupIds, true)));
 }
- 
+
 function all_telemetry(?string $userId = null, ?array $groupIds = null): array
 {
     $sql = "
@@ -808,7 +817,7 @@ function all_telemetry(?string $userId = null, ?array $groupIds = null): array
     }
     return $out;
 }
- 
+
 function score_for_user(string $userId, ?string $groupId = null): float
 {
     $sum = 0.0;
@@ -819,35 +828,37 @@ function score_for_user(string $userId, ?string $groupId = null): float
     }
     return round(min(100.0, $sum), 1);
 }
- 
+
 // ============================================================
 // TAMPILAN / LAYOUT
 // ============================================================
- 
+
 function layout_start(string $title, string $active = 'dashboard'): void
 {
     $user = require_login();
     $flash = take_flash();
     $teacher = is_teacher($user);
- 
+
     // Navigasi disesuaikan per peran pengguna sesuai instruksi
     if ($teacher) {
         $nav = [
             'dashboard' => ['▦', 'Dashboard', 'dashboard.php'],
-            'classes'   => ['▤', 'Kelas Saya', 'classes.php'],
+            'classes' => ['▤', 'Kelas Saya', 'classes.php'],
+            'integrations' => ['↗', 'Integrasi Akun Google', 'integrations.php'],
             'classroom' => ['◈', 'Monitoring', 'classroom.php'],
-            'reports'   => ['⌁', 'Laporan', 'reports.php'],
+            'reports' => ['⌁', 'Laporan', 'reports.php'],
         ];
     } else {
         $nav = [
-            'dashboard'     => ['▦', 'Dashboard', 'dashboard.php'],
-            'classes'       => ['▤', 'Kelas Saya', 'classes.php'],
-            'teams'         => ['♧', 'Kelompok Saya', 'teams.php'],
-            'tasks'         => ['☷', 'Tugas', 'tasks.php'],
+            'dashboard' => ['▦', 'Dashboard', 'dashboard.php'],
+            'classes' => ['▤', 'Kelas Saya', 'classes.php'],
+            'integrations' => ['↗', 'Integrasi Akun Google', 'integrations.php'],
+            'teams' => ['♧', 'Kelompok Saya', 'teams.php'],
+            'tasks' => ['☷', 'Tugas', 'tasks.php'],
             'contributions' => ['◈', 'Kontribusi', 'contributions.php'],
         ];
     }
- 
+
     echo '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . e($title) . ' · FairShare</title><link rel="stylesheet" href="assets/style.css?v=4"><script defer src="assets/app.js?v=4"></script></head><body>';
     echo '<aside class="sidebar" id="sidebar"><a class="brand" href="dashboard.php"><span class="brand-mark brand-logo"><img src="assets/fairshare-logo.svg" alt=""></span><span>FairShare<small>COLLABORATION INTELLIGENCE</small></span></a><div class="nav-caption">WORKSPACE</div><nav class="nav">';
     foreach ($nav as $key => $item) {
@@ -879,61 +890,29 @@ function layout_start(string $title, string $active = 'dashboard'): void
         <div class="notification-footer">Notifikasi akun FairShare</div>
     </section>
 </div>
-    <div class="profile-menu" data-profile-menu>
-        <button class="profile-trigger"
-                type="button"
-                data-profile-toggle
-                aria-haspopup="menu"
-                aria-expanded="false"
-                aria-controls="profilePanel"
-                title="Menu profil">
- 
-            <span class="avatar avatar-top">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span>
- 
-            <span class="top-user">
-                <b>' . e($user['name']) . '</b>
-                <small>' . e(ucfirst((string) ($user['role'] ?? 'mahasiswa'))) . '</small>
-            </span>
- 
-            <span class="profile-caret" aria-hidden="true">▾</span>
-        </button>
- 
-        <div class="profile-dropdown"
-             id="profilePanel"
-             data-profile-panel
-             role="menu"
-             hidden>
- 
-            <a class="profile-item danger" role="menuitem" href="logout.php">
-                <span aria-hidden="true">↪</span> Keluar
-            </a>
-        </div>
-    </div>
-    </div>
-    </header><main class="main-content">';
+    <span class="avatar avatar-top">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span><div class="top-user"><b>' . e($user['name']) . '</b><small>' . e(ucfirst((string) ($user['role'] ?? 'mahasiswa'))) . '</small></div></div></header><main class="main-content">';
     if ($flash) {
         echo '<div class="flash ' . e($flash['type']) . '" data-flash>' . e($flash['message']) . '</div>';
     }
 }
- 
+
 function layout_end(): void
 {
     echo '</main><footer class="footer"><span>© ' . date('Y') . ' FairShare · Built for transparent collaboration</span><span>Privasi terjaga <b>·</b> Aktivitas berbasis bukti</span></footer></div></body></html>';
 }
- 
+
 function page_heading(string $eyebrow, string $title, string $desc, string $action = ''): void
 {
     echo '<div class="page-heading"><div><div class="eyebrow">' . e($eyebrow) . '</div><h1>' . e($title) . '</h1><p>' . e($desc) . '</p></div>' . $action . '</div>';
 }
- 
+
 function button(string $label, string $href, string $kind = 'secondary'): string
 {
     return '<a class="btn ' . $kind . '" href="' . e($href) . '">' . $label . '</a>';
 }
- 
+
 function format_date(string $date): string
 {
     $ts = strtotime($date);
     return $ts ? date('d M Y', $ts) : $date;
 }
- 

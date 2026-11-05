@@ -2,6 +2,8 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/includes/bootstrap.php';
+require_once __DIR__ . '/integrations/google/google_service.php';
+require_once __DIR__ . '/includes/smart_assignment.php';
 
 $user = require_login();
 $teacher = is_teacher($user);
@@ -23,9 +25,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $targetWeek = max(1, (int) ($_POST['target_week'] ?? 1));
             $weight = max(1, min(5, (int) ($_POST['weight'] ?? 1)));
 
-            if ($title === '' || mb_strlen($title) > 200) {
+            // Pilihan tipe tugas: manual, gdocs, github
+            $taskType = trim((string) ($_POST['task_type'] ?? 'manual'));
+            if (!in_array($taskType, ['manual', 'gdocs', 'github'], true)) {
+                $taskType = 'manual';
+            }
+            $rawResourceUrl = trim((string) ($_POST['resource_url'] ?? ''));
+            $resourceUrl = null;
+            $externalResourceId = null;
+            $resourceTitle = null;
+            $syncStatus = 'not_required';
+
+            if ($taskType === 'gdocs') {
+                if ($rawResourceUrl === '') {
+                    $error = 'Link dokumen Google Docs wajib diisi jika memilih jenis tugas Google Docs.';
+                } else {
+                    $fileId = fs_google_parse_document_id($rawResourceUrl);
+                    if (!$fileId) {
+                        $error = 'URL harus berupa link Google Docs yang valid (contoh: https://docs.google.com/document/d/.../edit).';
+                    } else {
+                        $resourceUrl = $rawResourceUrl;
+                        $externalResourceId = $fileId;
+                        $resourceTitle = 'Google Docs';
+                        $syncStatus = 'connected';
+                        try {
+                            $accessToken = fs_google_access_token((string) $user['id']);
+                            $doc = fs_google_verify_document($accessToken, $fileId);
+                            $resourceTitle = (string) ($doc['name'] ?? 'Google Docs');
+                            $resourceUrl = (string) ($doc['webViewLink'] ?? $resourceUrl);
+                        } catch (Throwable) {
+                            // Link tetap disimpan; verifikasi dokumen dapat disinkronkan saat audit
+                        }
+                    }
+                }
+            } elseif ($taskType === 'github') {
+                if ($rawResourceUrl === '') {
+                    $error = 'Link repository GitHub wajib diisi jika memilih jenis tugas Kode di GitHub.';
+                } else {
+                    $repo = sa_parse_github_repo($rawResourceUrl);
+                    if (!$repo) {
+                        $error = 'URL harus berupa repository GitHub yang valid (contoh: https://github.com/owner/repository).';
+                    } else {
+                        $resourceUrl = 'https://github.com/' . $repo;
+                        $externalResourceId = $repo;
+                        $resourceTitle = $repo;
+                        $syncStatus = 'not_connected';
+                    }
+                }
+            }
+
+            if ($error === '' && ($title === '' || mb_strlen($title) > 200)) {
                 $error = 'Judul tugas valid wajib diisi (maksimal 200 karakter).';
-            } else {
+            }
+
+            if ($error === '') {
                 if ($teacher) {
                     // Dosen membuat tugas: bisa untuk semua kelompok di suatu kelas atau kelompok tertentu
                     $scope = (string) ($_POST['scope'] ?? 'single');
@@ -61,11 +114,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             id,
                             group_id,
                             assigned_user_id,
+                            assignment_batch_id,
                             title,
                             description,
                             weight,
                             status,
                             target_week,
+                            task_type,
+                            resource_url,
+                            external_resource_id,
+                            resource_title,
+                            sync_status,
                             completed_at,
                             created_at,
                             updated_at
@@ -73,26 +132,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             gen_random_uuid(),
                             CAST(:gid AS uuid),
                             NULL,
+                            CAST(:batch_id AS uuid),
                             :title,
                             :description,
                             :weight,
                             :status,
                             :target_week,
+                            :task_type,
+                            :resource_url,
+                            :external_resource_id,
+                            :resource_title,
+                            :sync_status,
                             CASE WHEN :status_done = 'done' THEN CURRENT_TIMESTAMP ELSE NULL END,
                             CURRENT_TIMESTAMP,
                             CURRENT_TIMESTAMP
                         )
                     ");
 
+                    $batchId = count($targetGroupIds) > 1 ? $pdo->query("SELECT gen_random_uuid()")->fetchColumn() : null;
+
                     foreach ($targetGroupIds as $tgid) {
                         $stmt->execute([
-                            'gid'         => $tgid,
-                            'title'       => $title,
-                            'description' => $desc !== '' ? $desc : null,
-                            'weight'      => $weight,
-                            'status'      => $status,
-                            'target_week' => $targetWeek,
-                            'status_done' => $status,
+                            'gid'                  => $tgid,
+                            'batch_id'             => $batchId,
+                            'title'                => $title,
+                            'description'          => $desc !== '' ? $desc : null,
+                            'weight'               => $weight,
+                            'status'               => $status,
+                            'target_week'          => $targetWeek,
+                            'task_type'            => $taskType,
+                            'resource_url'         => $resourceUrl,
+                            'external_resource_id' => $externalResourceId,
+                            'resource_title'       => $resourceTitle,
+                            'sync_status'          => $syncStatus,
+                            'status_done'          => $status,
                         ]);
                     }
 
@@ -115,11 +188,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 id,
                                 group_id,
                                 assigned_user_id,
+                                assignment_batch_id,
                                 title,
                                 description,
                                 weight,
                                 status,
                                 target_week,
+                                task_type,
+                                resource_url,
+                                external_resource_id,
+                                resource_title,
+                                sync_status,
                                 completed_at,
                                 created_at,
                                 updated_at
@@ -127,25 +206,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 gen_random_uuid(),
                                 CAST(:gid AS uuid),
                                 CAST(:uid AS uuid),
+                                NULL,
                                 :title,
                                 :description,
                                 :weight,
                                 :status,
                                 :target_week,
+                                :task_type,
+                                :resource_url,
+                                :external_resource_id,
+                                :resource_title,
+                                :sync_status,
                                 CASE WHEN :status_done = 'done' THEN CURRENT_TIMESTAMP ELSE NULL END,
                                 CURRENT_TIMESTAMP,
                                 CURRENT_TIMESTAMP
                             )
                         ");
                         $stmt->execute([
-                            'gid'         => $gid,
-                            'uid'         => (string) $user['id'],
-                            'title'       => $title,
-                            'description' => $desc !== '' ? $desc : null,
-                            'weight'      => $weight,
-                            'status'      => $status,
-                            'target_week' => $targetWeek,
-                            'status_done' => $status,
+                            'gid'                  => $gid,
+                            'uid'                  => (string) $user['id'],
+                            'title'                => $title,
+                            'description'          => $desc !== '' ? $desc : null,
+                            'weight'               => $weight,
+                            'status'               => $status,
+                            'target_week'          => $targetWeek,
+                            'task_type'            => $taskType,
+                            'resource_url'         => $resourceUrl,
+                            'external_resource_id' => $externalResourceId,
+                            'resource_title'       => $resourceTitle,
+                            'sync_status'          => $syncStatus,
+                            'status_done'          => $status,
                         ]);
 
                         log_activity('Tugas kelompok dibuat', $title, 'success');
@@ -291,12 +381,24 @@ $inProgCount = count(array_filter($allUserTasks, fn($t) => ($t['status_db'] ?? '
                     <div class="kanban-card-top">
                         <span class="task-tag"><?= e($t['weight']) ?>× bobot</span>
                         <span class="pill blue-pill" style="font-size:9px;"><?= e($t['group_name'] ?? 'Kelompok') ?></span>
+                        <?php if (($t['task_type'] ?? '') === 'gdocs'): ?>
+                            <span class="pill" style="font-size:9px; background:#e8f5e9; color:#1b5e20;">📄 Google Docs</span>
+                        <?php elseif (($t['task_type'] ?? '') === 'github'): ?>
+                            <span class="pill" style="font-size:9px; background:#f3e8ff; color:#6b21a8;">🐙 GitHub</span>
+                        <?php endif; ?>
                     </div>
-                    <h3><?= e($t['title']) ?></h3>
+                    <h3><a href="task_detail.php?id=<?= urlencode((string) $t['id']) ?>" style="color:inherit; text-decoration:none;"><?= e($t['title']) ?></a></h3>
                     <?php if (!empty($t['description'])): ?>
                         <p style="font-size:11px; color:#7e849e; margin-top:4px;"><?= e($t['description']) ?></p>
                     <?php endif; ?>
-                    <div class="kanban-card-bottom">
+                    <?php if (!empty($t['resource_url'])): ?>
+                        <div style="margin-top:6px; font-size:11px;">
+                            <a href="<?= e($t['resource_url']) ?>" target="_blank" rel="noopener noreferrer" style="color:#2563eb; text-decoration:underline;">
+                                <?= ($t['task_type'] ?? '') === 'gdocs' ? '📄 Buka Google Docs' : '🐙 Buka Repository' ?> ↗
+                            </a>
+                        </div>
+                    <?php endif; ?>
+                    <div class="kanban-card-bottom" style="margin-top:10px;">
                         <span class="due-date">◷ <?= e($t['due_date'] ?? ('Minggu ' . ($t['target_week'] ?? 1))) ?></span>
                         <form method="post" class="status-form">
                             <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
@@ -308,6 +410,9 @@ $inProgCount = count(array_filter($allUserTasks, fn($t) => ($t['status_db'] ?? '
                                 <?php endforeach; ?>
                             </select>
                         </form>
+                    </div>
+                    <div style="margin-top:8px; border-top:1px dashed #f1f2f6; padding-top:6px; text-align:right;">
+                        <a href="task_detail.php?id=<?= urlencode((string) $t['id']) ?>" style="font-size:11px; color:#4f46e5; font-weight:600; text-decoration:none;">Detail & Audit Tugas →</a>
                     </div>
                 </article>
             <?php endforeach; ?>
@@ -405,6 +510,23 @@ $inProgCount = count(array_filter($allUserTasks, fn($t) => ($t['status_db'] ?? '
             </div>
 
             <div>
+                <label>Jenis Tugas & Resource</label>
+                <select name="task_type" id="taskTypeSelect" onchange="toggleTaskResourceInputs()">
+                    <option value="manual">Tugas Biasa (Manual / Non-Resource)</option>
+                    <option value="gdocs">Dokumen Google Docs</option>
+                    <option value="github">Kode di GitHub</option>
+                </select>
+            </div>
+
+            <div class="field-wide" id="resourceFieldBox" hidden>
+                <label id="resourceFieldLabel">Link Dokumen Google Docs <span class="text-danger">*</span></label>
+                <input type="url" name="resource_url" id="resourceFieldInput" maxlength="2000" placeholder="https://docs.google.com/document/d/.../edit">
+                <small class="muted" id="resourceFieldHelp" style="display:block; margin-top:4px;">
+                    Dokumen Google Docs ini akan dilacak aktivitasnya melalui Google Drive Activity API untuk audit kontribusi tim.
+                </small>
+            </div>
+
+            <div>
                 <label>Target Minggu Ke-</label>
                 <input type="number" name="target_week" min="1" max="52" value="1" required>
             </div>
@@ -427,6 +549,32 @@ function toggleScopeInputs() {
     } else {
         if (singleField) singleField.hidden = false;
         if (classField) classField.hidden = true;
+    }
+}
+
+function toggleTaskResourceInputs() {
+    var type = document.getElementById("taskTypeSelect")?.value;
+    var box = document.getElementById("resourceFieldBox");
+    var label = document.getElementById("resourceFieldLabel");
+    var input = document.getElementById("resourceFieldInput");
+    var help = document.getElementById("resourceFieldHelp");
+    if (!box || !label || !input || !help) return;
+    if (type === "gdocs") {
+        box.hidden = false;
+        label.innerHTML = 'Link Dokumen Google Docs <span class="text-danger">*</span>';
+        input.placeholder = "https://docs.google.com/document/d/.../edit";
+        help.textContent = "Dokumen Google Docs ini akan dilacak aktivitasnya melalui Google Drive Activity API untuk audit kontribusi tim.";
+        input.required = true;
+    } else if (type === "github") {
+        box.hidden = false;
+        label.innerHTML = 'Link Repository GitHub <span class="text-danger">*</span>';
+        input.placeholder = "https://github.com/owner/repository";
+        help.textContent = "Masukkan tautan repository GitHub kelompok (contoh: https://github.com/owner/repository).";
+        input.required = true;
+    } else {
+        box.hidden = true;
+        input.required = false;
+        input.value = "";
     }
 }
 </script>
