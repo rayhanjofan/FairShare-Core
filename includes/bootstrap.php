@@ -472,6 +472,3 @@ function format_date(string $date): string
     return $ts ? date('d M Y', $ts) : $date;
 }
  
-
-
-
