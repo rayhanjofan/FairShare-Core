@@ -475,6 +475,11 @@ function class_tasks(string $classId): array
             t.completed_at::text AS completed_at,
             t.created_at::text AS created_at,
             t.updated_at::text AS updated_at,
+            t.task_type,
+            t.resource_url,
+            t.external_resource_id,
+            t.resource_title,
+            t.sync_status,
             g.name AS group_name,
             u.name AS assigned_user_name
         FROM public.tasks t
@@ -723,6 +728,11 @@ function all_tasks(): array
             t.completed_at::text AS completed_at,
             t.created_at::text AS created_at,
             t.updated_at::text AS updated_at,
+            t.task_type,
+            t.resource_url,
+            t.external_resource_id,
+            t.resource_title,
+            t.sync_status,
             g.name AS group_name,
             g.parent_group_id::text AS parent_group_id,
             u.name AS assigned_user_name

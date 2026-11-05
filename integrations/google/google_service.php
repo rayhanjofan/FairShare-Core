@@ -3,6 +3,30 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__, 2) . '/includes/bootstrap.php';
 
+/** Exception class for structured Google API HTTP responses */
+class FsGoogleApiException extends RuntimeException
+{
+    private int $httpStatus;
+    private array $details;
+
+    public function __construct(string $message, int $httpStatus = 0, array $details = [], ?Throwable $previous = null)
+    {
+        parent::__construct($message, $httpStatus, $previous);
+        $this->httpStatus = $httpStatus;
+        $this->details = $details;
+    }
+
+    public function getHttpStatus(): int
+    {
+        return $this->httpStatus;
+    }
+
+    public function getDetails(): array
+    {
+        return $this->details;
+    }
+}
+
 /** Small HTTPS JSON client based on PHP streams (no Composer package required). */
 function fs_google_http_json(string $method, string $url, array $headers = [], ?string $body = null): array
 {
@@ -42,28 +66,89 @@ function fs_google_http_json(string $method, string $url, array $headers = [], ?
         throw new RuntimeException('Layanan eksternal mengembalikan respons yang tidak valid.');
     }
     if ($status < 200 || $status >= 300) {
-        $message = (string) ($data['error_description'] ?? $data['error']['message'] ?? $data['error'] ?? 'Permintaan ditolak.');
-        throw new RuntimeException('Google API HTTP ' . $status . ': ' . mb_substr($message, 0, 300));
+        $rawError = $data['error'] ?? null;
+        $errorDesc = (string) ($data['error_description'] ?? '');
+        $message = '';
+        $reason = '';
+        if (is_array($rawError)) {
+            $message = (string) ($rawError['message'] ?? '');
+            $reason = (string) ($rawError['status'] ?? ($rawError['details'][0]['reason'] ?? ''));
+        } elseif (is_string($rawError)) {
+            $message = $rawError;
+            if ($errorDesc !== '') {
+                $message .= ': ' . $errorDesc;
+            }
+        } else {
+            $message = $errorDesc !== '' ? $errorDesc : 'Permintaan Google API ditolak.';
+        }
+        $cleanMessage = mb_substr(trim($message), 0, 300);
+        throw new FsGoogleApiException('Google API HTTP ' . $status . ($reason !== '' ? ' (' . $reason . ')' : '') . ': ' . $cleanMessage, $status, is_array($data) ? $data : []);
     }
     return $data;
 }
 
+/** Safely extracts a credential string even if the user pasted a raw JSON credentials file. */
+function fs_google_extract_credential_string(string $raw, string $field): string
+{
+    $trimmed = trim($raw);
+    if ($trimmed === '') {
+        return '';
+    }
+    if ((str_starts_with($trimmed, '{') && str_ends_with($trimmed, '}'))
+        || (str_starts_with($trimmed, "'{") && str_ends_with($trimmed, "'}"))
+        || (str_starts_with($trimmed, '"{') && str_ends_with($trimmed, '}"'))) {
+        $clean = trim($trimmed, "\"'");
+        $json = json_decode($clean, true);
+        if (is_array($json)) {
+            $extracted = $json['web'][$field]
+                ?? $json['installed'][$field]
+                ?? $json[$field]
+                ?? null;
+            if (is_string($extracted) && trim($extracted) !== '') {
+                return trim($extracted);
+            }
+        }
+    }
+    return $trimmed;
+}
+
 function fs_google_configured(): bool
 {
-    return app_env('GOOGLE_CLIENT_ID') !== ''
-        && app_env('GOOGLE_CLIENT_SECRET') !== ''
-        && app_env('GOOGLE_REDIRECT_URI') !== ''
-        && strlen(app_env('APP_ENCRYPTION_KEY')) >= 32;
+    $clientId = fs_google_extract_credential_string(app_env('GOOGLE_CLIENT_ID'), 'client_id');
+    $rawSecret = app_env('GOOGLE_CLIENT_SECRET');
+    if ($clientId === '') {
+        $clientId = fs_google_extract_credential_string($rawSecret, 'client_id');
+    }
+    $clientSecret = fs_google_extract_credential_string($rawSecret, 'client_secret');
+    $redirectUri = trim(app_env('GOOGLE_REDIRECT_URI'));
+    $encKey = trim(app_env('APP_ENCRYPTION_KEY'));
+
+    return $clientId !== ''
+        && $clientSecret !== ''
+        && $redirectUri !== ''
+        && (strlen($encKey) >= 32 || (strlen($encKey) === 64 && ctype_xdigit($encKey)));
 }
 
 function fs_google_required_config(): array
 {
+    $rawSecret = app_env('GOOGLE_CLIENT_SECRET');
+    $clientId = fs_google_extract_credential_string(app_env('GOOGLE_CLIENT_ID'), 'client_id');
+    if ($clientId === '') {
+        $clientId = fs_google_extract_credential_string($rawSecret, 'client_id');
+    }
+    $clientSecret = fs_google_extract_credential_string($rawSecret, 'client_secret');
+    $redirectUri = trim(app_env('GOOGLE_REDIRECT_URI'));
+
     $config = [
-        'client_id' => app_env('GOOGLE_CLIENT_ID'),
-        'client_secret' => app_env('GOOGLE_CLIENT_SECRET'),
-        'redirect_uri' => app_env('GOOGLE_REDIRECT_URI'),
+        'client_id' => $clientId,
+        'client_secret' => $clientSecret,
+        'redirect_uri' => $redirectUri,
     ];
-    if (in_array('', $config, true) || strlen(app_env('APP_ENCRYPTION_KEY')) < 32) {
+
+    $encKey = trim(app_env('APP_ENCRYPTION_KEY'));
+    $isKeyValid = (strlen($encKey) >= 32);
+
+    if ($config['client_id'] === '' || $config['client_secret'] === '' || $config['redirect_uri'] === '' || !$isKeyValid) {
         throw new RuntimeException('Konfigurasi Google belum lengkap. Isi GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI, dan APP_ENCRYPTION_KEY pada data/.env.');
     }
     $redirect = parse_url($config['redirect_uri']);
@@ -71,16 +156,26 @@ function fs_google_required_config(): array
         throw new RuntimeException('GOOGLE_REDIRECT_URI tidak valid.');
     }
     if (($redirect['scheme'] ?? '') === 'http' && !in_array($redirect['host'] ?? '', ['localhost', '127.0.0.1'], true)) {
-        throw new RuntimeException('HTTP hanya diizinkan untuk localhost. Gunakan HTTPS untuk server publik.');
+        throw new RuntimeException('HTTP hanya diizinkan untuk localhost atau 127.0.0.1. Gunakan HTTPS untuk server publik.');
     }
     return $config;
 }
 
 function fs_google_encryption_key(): string
 {
-    $secret = app_env('APP_ENCRYPTION_KEY');
+    $secret = trim(app_env('APP_ENCRYPTION_KEY'));
+    if ($secret === '') {
+        throw new RuntimeException('APP_ENCRYPTION_KEY belum diatur pada data/.env.');
+    }
+    // If key is a 64-character hex string (32 bytes hex), decode directly to raw binary key.
+    if (strlen($secret) === 64 && ctype_xdigit($secret)) {
+        $binary = hex2bin($secret);
+        if ($binary !== false && strlen($binary) === 32) {
+            return $binary;
+        }
+    }
     if (strlen($secret) < 32) {
-        throw new RuntimeException('APP_ENCRYPTION_KEY belum diatur atau terlalu pendek.');
+        throw new RuntimeException('APP_ENCRYPTION_KEY terlalu pendek. Gunakan 64 karakter hex atau minimal 32 karakter teks.');
     }
     return hash('sha256', $secret, true);
 }
@@ -112,6 +207,38 @@ function fs_decrypt_secret(string $encoded): string
     return $plain;
 }
 
+function fs_google_granted_scopes(array|string $scopes): array
+{
+    if (is_array($scopes)) {
+        return array_values(array_filter(array_map('trim', $scopes)));
+    }
+    $parts = preg_split('/\s+/', trim((string) $scopes)) ?: [];
+    return array_values(array_filter($parts));
+}
+
+function fs_google_has_scope(array|string $granted, string $scopeToCheck): bool
+{
+    $list = fs_google_granted_scopes($granted);
+    return in_array($scopeToCheck, $list, true);
+}
+
+function fs_google_has_activity_scope(array|string $granted): bool
+{
+    $list = fs_google_granted_scopes($granted);
+    return in_array('https://www.googleapis.com/auth/drive.activity.readonly', $list, true)
+        || in_array('https://www.googleapis.com/auth/drive.activity', $list, true);
+}
+
+function fs_google_has_metadata_scope(array|string $granted): bool
+{
+    $list = fs_google_granted_scopes($granted);
+    return in_array('https://www.googleapis.com/auth/drive.metadata.readonly', $list, true)
+        || in_array('https://www.googleapis.com/auth/drive.metadata', $list, true)
+        || in_array('https://www.googleapis.com/auth/drive.readonly', $list, true)
+        || in_array('https://www.googleapis.com/auth/drive', $list, true)
+        || in_array('https://www.googleapis.com/auth/drive.file', $list, true);
+}
+
 function fs_google_integration(string $userId): ?array
 {
     if (!valid_uuid($userId)) {
@@ -126,17 +253,20 @@ function fs_google_integration(string $userId): ?array
 function fs_google_exchange_code(string $code, string $codeVerifier = ''): array
 {
     $config = fs_google_required_config();
-    return fs_google_http_json('POST', 'https://oauth2.googleapis.com/token', [
-        'Content-Type' => 'application/x-www-form-urlencoded',
-        'Accept' => 'application/json',
-    ], http_build_query([
+    $params = [
         'code' => $code,
         'client_id' => $config['client_id'],
         'client_secret' => $config['client_secret'],
         'redirect_uri' => $config['redirect_uri'],
         'grant_type' => 'authorization_code',
-        'code_verifier' => $codeVerifier,
-    ], '', '&', PHP_QUERY_RFC3986));
+    ];
+    if ($codeVerifier !== '') {
+        $params['code_verifier'] = $codeVerifier;
+    }
+    return fs_google_http_json('POST', 'https://oauth2.googleapis.com/token', [
+        'Content-Type' => 'application/x-www-form-urlencoded',
+        'Accept' => 'application/json',
+    ], http_build_query($params, '', '&', PHP_QUERY_RFC3986));
 }
 
 function fs_google_fetch_userinfo(string $accessToken): array
@@ -147,8 +277,11 @@ function fs_google_fetch_userinfo(string $accessToken): array
     ]);
 }
 
-function fs_google_store_tokens(string $userId, array $userinfo, array $token): void
+function fs_google_store_tokens(string $userId, array $userinfo, array $token): array
 {
+    if (!valid_uuid($userId)) {
+        throw new InvalidArgumentException('ID pengguna tidak valid.');
+    }
     $sub = trim((string) ($userinfo['sub'] ?? ''));
     $email = strtolower(trim((string) ($userinfo['email'] ?? '')));
     $access = (string) ($token['access_token'] ?? '');
@@ -156,28 +289,37 @@ function fs_google_store_tokens(string $userId, array $userinfo, array $token): 
         throw new RuntimeException('Google tidak mengembalikan identitas akun atau access token yang lengkap.');
     }
     if (!filter_var($email, FILTER_VALIDATE_EMAIL) || !in_array($userinfo['email_verified'] ?? false, [true, 'true', 1, '1'], true)) {
-        throw new RuntimeException('Akun Google harus mempunyai email terverifikasi.');
+        throw new RuntimeException('Akun Google harus mempunyai email yang telah terverifikasi.');
     }
+
     $existing = fs_google_integration($userId);
     $refreshToken = (string) ($token['refresh_token'] ?? '');
     if ($refreshToken === '' && $existing && !empty($existing['refresh_token_encrypted'])) {
-        $refreshToken = fs_decrypt_secret((string) $existing['refresh_token_encrypted']);
+        try {
+            $refreshToken = fs_decrypt_secret((string) $existing['refresh_token_encrypted']);
+        } catch (Throwable) {
+            $refreshToken = '';
+        }
     }
     if ($refreshToken === '') {
-        throw new RuntimeException('Google tidak mengirim refresh token. Putuskan koneksi aplikasi pada akun Google lalu hubungkan kembali dengan izin offline.');
+        throw new RuntimeException('Google tidak mengirimkan refresh token offline. Jika Anda sebelumnya pernah menyetujui izin aplikasi ini, putuskan koneksi di myaccount.google.com/permissions lalu hubungkan kembali dengan menyetujui akses offline.');
     }
+
     $scopes = trim((string) ($token['scope'] ?? ''));
-    $grantedScopes = preg_split('/\s+/', $scopes) ?: [];
-    $requiredScopes = [
-        'https://www.googleapis.com/auth/drive.activity.readonly',
-        'https://www.googleapis.com/auth/drive.metadata.readonly',
-    ];
-    $missingScopes = array_values(array_diff($requiredScopes, $grantedScopes));
-    if ($missingScopes) {
-        throw new RuntimeException('Izin Google Drive Activity dan metadata belum diberikan. Putuskan koneksi lalu hubungkan kembali dengan menyetujui semua izin yang diminta.');
-    }
+    $hasActivityScope = fs_google_has_activity_scope($scopes);
+    $hasMetadataScope = fs_google_has_metadata_scope($scopes);
+
     $expiresAt = gmdate('Y-m-d H:i:s', time() + max(60, (int) ($token['expires_in'] ?? 3600)));
     $pdo = require_db();
+
+    // Prevent connecting the same Google account to two different FairShare user accounts
+    $checkStmt = $pdo->prepare("SELECT user_id::text AS user_id FROM public.user_integrations WHERE provider = 'google' AND provider_user_id = :provider_user_id LIMIT 1");
+    $checkStmt->execute(['provider_user_id' => $sub]);
+    $existingOwner = $checkStmt->fetchColumn();
+    if ($existingOwner && strtolower((string) $existingOwner) !== strtolower($userId)) {
+        throw new RuntimeException('Akun Google ini (' . $email . ') telah terhubung ke pengguna FairShare lain. Gunakan akun Google milik Anda sendiri.');
+    }
+
     $stmt = $pdo->prepare("INSERT INTO public.user_integrations (user_id, provider, provider_user_id, provider_email, access_token_encrypted, refresh_token_encrypted, token_expires_at, scopes, created_at, updated_at) VALUES (CAST(:user_id AS UUID), 'google', :provider_user_id, :provider_email, :access_token, :refresh_token, :expires_at, :scopes, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT (user_id, provider) DO UPDATE SET provider_user_id = EXCLUDED.provider_user_id, provider_email = EXCLUDED.provider_email, access_token_encrypted = EXCLUDED.access_token_encrypted, refresh_token_encrypted = EXCLUDED.refresh_token_encrypted, token_expires_at = EXCLUDED.token_expires_at, scopes = EXCLUDED.scopes, updated_at = CURRENT_TIMESTAMP");
     $stmt->execute([
         'user_id' => $userId,
@@ -188,6 +330,12 @@ function fs_google_store_tokens(string $userId, array $userinfo, array $token): 
         'expires_at' => $expiresAt,
         'scopes' => $scopes,
     ]);
+
+    return [
+        'email' => $email,
+        'has_activity_scope' => $hasActivityScope,
+        'has_metadata_scope' => $hasMetadataScope,
+    ];
 }
 
 function fs_google_access_token(string $userId): string
@@ -198,7 +346,13 @@ function fs_google_access_token(string $userId): string
     }
     $expiresValue = trim((string) ($integration['token_expires_at'] ?? ''));
     $expires = $expiresValue !== '' ? (strtotime($expiresValue . ' UTC') ?: 0) : 0;
-    $access = fs_decrypt_secret((string) $integration['access_token_encrypted']);
+    
+    try {
+        $access = fs_decrypt_secret((string) $integration['access_token_encrypted']);
+    } catch (Throwable) {
+        $access = '';
+    }
+
     if ($expires > time() + 90 && $access !== '') {
         return $access;
     }
@@ -208,20 +362,29 @@ function fs_google_access_token(string $userId): string
     }
     $config = fs_google_required_config();
     $refreshToken = fs_decrypt_secret($refresh);
-    $token = fs_google_http_json('POST', 'https://oauth2.googleapis.com/token', [
-        'Content-Type' => 'application/x-www-form-urlencoded',
-        'Accept' => 'application/json',
-    ], http_build_query([
-        'client_id' => $config['client_id'],
-        'client_secret' => $config['client_secret'],
-        'refresh_token' => $refreshToken,
-        'grant_type' => 'refresh_token',
-    ], '', '&', PHP_QUERY_RFC3986));
+
+    try {
+        $token = fs_google_http_json('POST', 'https://oauth2.googleapis.com/token', [
+            'Content-Type' => 'application/x-www-form-urlencoded',
+            'Accept' => 'application/json',
+        ], http_build_query([
+            'client_id' => $config['client_id'],
+            'client_secret' => $config['client_secret'],
+            'refresh_token' => $refreshToken,
+            'grant_type' => 'refresh_token',
+        ], '', '&', PHP_QUERY_RFC3986));
+    } catch (Throwable $e) {
+        if (str_contains($e->getMessage(), 'invalid_grant') || str_contains($e->getMessage(), 'HTTP 400') || str_contains($e->getMessage(), 'HTTP 401')) {
+            throw new RuntimeException('Sesi otorisasi Google telah kedaluwarsa atau akses telah dicabut. Silakan hubungkan ulang akun Google Anda pada menu Integrasi.', 401, $e);
+        }
+        throw new RuntimeException('Google gagal memperbarui access token: ' . $e->getMessage(), 0, $e);
+    }
+
     $newAccess = (string) ($token['access_token'] ?? '');
     if ($newAccess === '') {
-        throw new RuntimeException('Google gagal memperbarui access token. Hubungkan ulang akun Google.');
+        throw new RuntimeException('Google tidak mengembalikan access token baru. Hubungkan ulang akun Google.');
     }
-    $newRefresh = (string) ($token['refresh_token'] ?? $refreshToken);
+    $newRefresh = !empty($token['refresh_token']) ? (string) $token['refresh_token'] : $refreshToken;
     $expiresAt = gmdate('Y-m-d H:i:s', time() + max(60, (int) ($token['expires_in'] ?? 3600)));
     $stmt = require_db()->prepare("UPDATE public.user_integrations SET access_token_encrypted = :access_token, refresh_token_encrypted = :refresh_token, token_expires_at = :expires_at, updated_at = CURRENT_TIMESTAMP WHERE user_id = CAST(:user_id AS UUID) AND provider = 'google'");
     $stmt->execute([
@@ -231,6 +394,22 @@ function fs_google_access_token(string $userId): string
         'user_id' => $userId,
     ]);
     return $newAccess;
+}
+
+/** Revoke access token or refresh token at Google OAuth server when disconnecting */
+function fs_google_revoke_token(?string $tokenOrSecret): bool
+{
+    if (empty($tokenOrSecret)) {
+        return false;
+    }
+    try {
+        fs_google_http_json('POST', 'https://oauth2.googleapis.com/revoke', [
+            'Content-Type' => 'application/x-www-form-urlencoded',
+        ], http_build_query(['token' => $tokenOrSecret]));
+        return true;
+    } catch (Throwable) {
+        return false;
+    }
 }
 
 function fs_google_parse_document_id(string $url): ?string
@@ -255,10 +434,27 @@ function fs_google_verify_document(string $accessToken, string $fileId): array
     $url = 'https://www.googleapis.com/drive/v3/files/' . rawurlencode($fileId)
         . '?fields=' . rawurlencode('id,name,mimeType,webViewLink')
         . '&supportsAllDrives=true';
-    $file = fs_google_http_json('GET', $url, [
-        'Authorization' => 'Bearer ' . $accessToken,
-        'Accept' => 'application/json',
-    ]);
+    try {
+        $file = fs_google_http_json('GET', $url, [
+            'Authorization' => 'Bearer ' . $accessToken,
+            'Accept' => 'application/json',
+        ]);
+    } catch (FsGoogleApiException $e) {
+        if ($e->getHttpStatus() === 404) {
+            throw new RuntimeException('Dokumen Google Docs tidak ditemukan atau akun Google Anda tidak memiliki izin akses. Pastikan link benar dan dokumen telah dibagikan (Share) ke email Google Anda.', 404, $e);
+        }
+        if ($e->getHttpStatus() === 403) {
+            throw new RuntimeException('Akses ke dokumen ditolak Google (HTTP 403). Pastikan email Google Anda memiliki izin melihat/mengedit dokumen ini dan Google Drive API telah diaktifkan di Google Cloud Console.', 403, $e);
+        }
+        if ($e->getHttpStatus() === 401) {
+            throw new RuntimeException('Sesi otorisasi Google telah kedaluwarsa. Hubungkan ulang akun Google Anda pada menu Integrasi.', 401, $e);
+        }
+        if ($e->getHttpStatus() === 429) {
+            throw new RuntimeException('Batas kuota Google Drive API terlampaui. Silakan coba kembali beberapa saat lagi.', 429, $e);
+        }
+        throw $e;
+    }
+
     if (($file['mimeType'] ?? '') !== 'application/vnd.google-apps.document') {
         throw new RuntimeException('Resource yang dipilih bukan file Google Docs.');
     }
@@ -281,11 +477,33 @@ function fs_google_query_activity(string $accessToken, string $fileId, string $s
     $all = [];
     $pageCount = 0;
     do {
-        $response = fs_google_http_json('POST', 'https://driveactivity.googleapis.com/v2/activity:query', [
-            'Authorization' => 'Bearer ' . $accessToken,
-            'Content-Type' => 'application/json',
-            'Accept' => 'application/json',
-        ], json_encode($request, JSON_THROW_ON_ERROR));
+        try {
+            $response = fs_google_http_json('POST', 'https://driveactivity.googleapis.com/v2/activity:query', [
+                'Authorization' => 'Bearer ' . $accessToken,
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ], json_encode($request, JSON_THROW_ON_ERROR));
+        } catch (FsGoogleApiException $e) {
+            if ($e->getHttpStatus() === 403) {
+                $details = $e->getDetails();
+                $reason = (string) ($details['error']['status'] ?? ($details['error']['details'][0]['reason'] ?? ''));
+                if (str_contains($reason, 'SCOPE') || str_contains($e->getMessage(), 'ACCESS_TOKEN_SCOPE_INSUFFICIENT')) {
+                    throw new RuntimeException('Izin Google Drive Activity belum diberikan pada akun Google Anda. Buka menu Integrasi dan hubungkan ulang dengan menyetujui izin aktivitas Drive.', 403, $e);
+                }
+                throw new RuntimeException('Akses Google Drive Activity API ditolak (HTTP 403). Pastikan Google Drive Activity API telah diaktifkan di Google Cloud Console dan dokumen dibagikan ke akun Anda.', 403, $e);
+            }
+            if ($e->getHttpStatus() === 401) {
+                throw new RuntimeException('Sesi otorisasi Google telah kedaluwarsa. Silakan hubungkan ulang akun Google Anda.', 401, $e);
+            }
+            if ($e->getHttpStatus() === 404) {
+                throw new RuntimeException('Dokumen tidak ditemukan dalam riwayat Google Drive Activity.', 404, $e);
+            }
+            if ($e->getHttpStatus() === 429) {
+                throw new RuntimeException('Batas kuota Google Drive Activity API tercapai. Tunggu beberapa saat sebelum sinkronisasi ulang.', 429, $e);
+            }
+            throw $e;
+        }
+
         foreach (($response['activities'] ?? []) as $activity) {
             if (is_array($activity)) {
                 $all[] = $activity;
@@ -401,6 +619,11 @@ function fs_google_sync_task(string $taskId): array
         $integration = fs_google_integration((string) $memberId);
         if (!$integration) {
             $skippedAccounts++;
+            continue;
+        }
+        if (!fs_google_has_activity_scope($integration['scopes'] ?? '')) {
+            $skippedAccounts++;
+            $errors[] = 'Akun Google ' . ($integration['provider_email'] ?? 'anggota') . ' belum memiliki izin Google Drive Activity.';
             continue;
         }
         try {
