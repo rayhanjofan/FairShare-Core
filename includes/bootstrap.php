@@ -850,7 +850,7 @@ function layout_start(string $title, string $active = 'dashboard'): void
         'settings' => ['⚙', 'Pengaturan', 'settings.php'],
     ];
 
-    echo '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . e($title) . ' · FairShare</title><script>(function(){try{var t=localStorage.getItem("fairshare-theme");if(t)document.documentElement.dataset.theme=t;}catch(e){}})();</script><link rel="stylesheet" href="assets/style.css?v=5"><script defer src="assets/app.js?v=5"></script></head><body>';
+    echo '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . e($title) . ' · FairShare</title><script>(function(){try{var t=localStorage.getItem("fairshare-theme");if(t)document.documentElement.dataset.theme=t;}catch(e){}})();</script><link rel="stylesheet" href="assets/style.css?v=6"><script defer src="assets/app.js?v=6"></script></head><body>';
     echo '<aside class="sidebar" id="sidebar"><a class="brand" href="dashboard.php"><span class="brand-mark brand-logo"><img src="assets/fairshare-logo.svg" alt=""></span><span>FairShare<small>COLLABORATION INTELLIGENCE</small></span></a><div class="nav-caption">WORKSPACE</div><nav class="nav">';
     foreach ($nav as $key => $item) {
         if ($key === 'classroom' && !$teacher) {
@@ -858,7 +858,7 @@ function layout_start(string $title, string $active = 'dashboard'): void
         }
         echo '<a class="' . ($active === $key ? 'active' : '') . '" href="' . $item[2] . '"><span class="nav-icon">' . $item[0] . '</span><span>' . $item[1] . '</span>' . ($active === $key ? '<i></i>' : '') . '</a>';
     }
-    echo '</nav><div class="sidebar-bottom"><div class="workspace-card"><span class="workspace-icon">✦</span><div><b>FairShare Academic</b><small>' . ($teacher ? 'Portal Dosen' : 'Portal Mahasiswa') . '</small></div><span class="online-dot"></span></div><div class="profile-mini"><span class="avatar">' . e(mb_strtoupper(mb_substr($user['name'], 0, 1))) . '</span><div><b>' . e($user['name']) . '</b><small>' . e(ucfirst((string) ($user['role'] ?? 'mahasiswa'))) . '</small></div></div></div></aside>';
+    echo '</nav><div class="sidebar-bottom"><div class="workspace-card"><span class="workspace-icon">✦</span><div><b>FairShare Academic</b><small>' . ($teacher ? 'Portal Dosen' : 'Portal Mahasiswa') . '</small></div><span class="online-dot"></span></div></div></aside>';
     echo '<div class="app-shell"><header class="topbar"><div class="topbar-left"><button class="mobile-menu" data-menu-toggle aria-label="Buka menu">☰</button><div><div class="breadcrumb">FAIRSHARE <span>/</span> ' . e(strtoupper($title)) . '</div><div class="topbar-sub">' . ($teacher ? 'Portal Dosen Pengampu & Monitoring Kolaborasi' : 'Workspace kontribusi dan transparansi kolaborasi mahasiswa') . '</div></div></div><div class="topbar-actions"><span class="system-status"><i></i> Sistem aktif</span>
     <div class="notification-wrap" data-notification-root data-csrf="' . e(csrf_token()) . '">
     <button class="icon-btn notification-trigger" type="button" data-notification-toggle aria-label="Buka notifikasi" aria-expanded="false" aria-controls="notificationPanel">

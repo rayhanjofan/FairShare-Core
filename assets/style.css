@@ -146,7 +146,7 @@ button {
   border: 1px solid #ffffff0c;
   border-radius: 12px;
   padding: 11px 9px;
-  margin: 0 2px 14px;
+  margin: 0 2px 0;
 }
 .workspace-icon {
   display: grid;
@@ -158,9 +158,7 @@ button {
   color: #5a49db;
 }
 .workspace-card b,
-.workspace-card small,
-.profile-mini b,
-.profile-mini small {
+.workspace-card small {
   display: block;
 }
 .workspace-card b {
@@ -179,27 +177,6 @@ button {
   border-radius: 50%;
   margin-left: auto;
   box-shadow: 0 0 10px #50d8a066;
-}
-.profile-mini {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  border-top: 1px solid #ffffff12;
-  padding: 15px 3px 0;
-  font-size: 10px;
-}
-.profile-mini b {
-  color: #f4f4fc;
-}
-.profile-mini small {
-  font-size: 9px;
-  color: #8a90ad;
-  margin-top: 3px;
-}
-.profile-mini > a {
-  margin-left: auto;
-  color: #8b91ad;
-  font-size: 20px;
 }
 .avatar {
   display: grid;
