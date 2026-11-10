@@ -27,29 +27,52 @@ if (!$teacher) {
 }
 $recent = array_slice($activity, 0, 5);
 
-// ==========================================
-// PENGOLAHAN GRAFIK DINAMIS 7 HARI TERAKHIR
-// ==========================================
+// ==============================================================
+// PENGOLAHAN GRAFIK DINAMIS (TELEMETRI + ACTIVITY.JSON LOKAL)
+// ==============================================================
 $indoDays = ['Sun' => 'Min', 'Mon' => 'Sen', 'Tue' => 'Sel', 'Wed' => 'Rab', 'Thu' => 'Kam', 'Fri' => 'Jum', 'Sat' => 'Sab'];
 $chartDays = [];
 
+// Petakan 7 hari terakhir mundur dari hari ini(rabu, karena dihari selasa tadi saya mengerjakannya).
 for ($i = 6; $i >= 0; $i--) {
-    $timestamp = strtotime("-$i days");
-    $dateKey = date('Y-m-d', $timestamp);
-    $engDay = date('D', $timestamp);
-    $chartDays[$dateKey] = [
+    $ts = strtotime("-$i days");
+    $dKey = date('Y-m-d', $ts);
+    $engDay = date('D', $ts);
+    $chartDays[$dKey] = [
         'label' => $indoDays[$engDay] ?? $engDay,
         'count' => 0
     ];
 }
 
-// Hitung kemunculan log per tanggal dari data telemetri
-foreach ($mine as $logItem) {
-    $rawDate = $logItem['date'] ?? $logItem['created_at'] ?? $logItem['activity_timestamp'] ?? '';
+// 1. Hitung aktivitas dari database telemetri Supabase (jika ada)
+foreach ($mine as $l) {
+    $rawDate = $l['date'] ?? $l['created_at'] ?? $l['activity_timestamp'] ?? '';
     if (!empty($rawDate)) {
-        $parsedDate = date('Y-m-d', strtotime((string)$rawDate));
-        if (isset($chartDays[$parsedDate])) {
-            $chartDays[$parsedDate]['count']++;
+        $pDate = date('Y-m-d', strtotime((string)$rawDate));
+        if (isset($chartDays[$pDate])) {
+            $chartDays[$pDate]['count']++;
+        }
+    }
+}
+
+// 2. Hitung aktivitas dari activity.json lokal (Tugas dibuat, Kelompok dibuat, Login)
+foreach ($activity as $act) {
+    $rawTime = $act['time'] ?? $act['timestamp'] ?? $act['date'] ?? '';
+    if (!empty($rawTime)) {
+        $pDate = date('Y-m-d', strtotime((string)$rawTime));
+        if (isset($chartDays[$pDate])) {
+            $chartDays[$pDate]['count']++;
+        }
+    }
+}
+
+// 3. Hitung tugas WBS
+foreach ($tasks as $t) {
+    $rawDate = $t['created_at'] ?? $t['updated_at'] ?? '';
+    if (!empty($rawDate)) {
+        $pDate = date('Y-m-d', strtotime((string)$rawDate));
+        if (isset($chartDays[$pDate])) {
+            $chartDays[$pDate]['count']++;
         }
     }
 }
@@ -63,14 +86,14 @@ $upperBound = max(4, $maxCount); // Skala sumbu Y dinamis
 $points = [];
 $stepX = 640 / ($totalPoints - 1);
 
-foreach ($dayValues as $idx => $dayData) {
+foreach ($dayValues as $idx => $d) {
     $x = round($idx * $stepX, 1);
-    // Skala Y: 0 aktivitas berada di y=160, nilai tertinggi mendekati y=20
-    $y = round(160 - (($dayData['count'] / $upperBound) * 140), 1);
+    // Skala Y: 0 aktivitas di y=155, nilai tertinggi di y=25
+    $y = round(155 - (($d['count'] / $upperBound) * 130), 1);
     $points[] = ['x' => $x, 'y' => $y];
 }
 
-// Bangun kurva halus (cubic bezier) SVG
+// Bangun kurva halus SVG
 $svgPath = "M {$points[0]['x']} {$points[0]['y']}";
 for ($i = 0; $i < count($points) - 1; $i++) {
     $p0 = $points[$i];
@@ -81,8 +104,8 @@ for ($i = 0; $i < count($points) - 1; $i++) {
 $svgArea = $svgPath . " L 640 180 L 0 180 Z";
 
 $chartXLabels = '';
-foreach ($dayValues as $dayData) {
-    $chartXLabels .= '<span>' . e($dayData['label']) . '</span>';
+foreach ($dayValues as $d) {
+    $chartXLabels .= '<span>' . e($d['label']) . '</span>';
 }
 
 $chartYLabels = '<span>' . $upperBound . '</span>'
@@ -105,9 +128,10 @@ page_heading(
 );
 
 echo '<section class="welcome-banner"><div><span class="banner-overline">FAIRSHARE INSIGHT</span><h2>Kolaborasi yang baik dimulai dari transparansi.</h2><p>Semua progres penting tim dalam satu workspace.</p></div><div class="banner-art"><div class="art-ring ring-a"></div><div class="art-ring ring-b"></div><div class="art-core art-logo"><img src="assets/fairshare-logo.svg" alt="Logo FairShare"></div><div class="art-tag">LIVE WORKSPACE</div></div></section>';
-echo '<div class="stats-grid"><article class="stat-card"><div class="stat-top"><span class="stat-label">' . ($teacher ? 'KELOMPOK TERPANTAU' : 'WEI SCORE') . '</span><span class="stat-icon violet">◈</span></div><div class="stat-number">' . ($teacher ? count($groups) : number_format($score, 1)) . '<small>' . ($teacher ? ' kelompok' : '/100') . '</small></div><div class="stat-foot"><span class="pill purple">' . ($teacher ? 'Mode pemantauan' : 'Aktivitas tersimpan') . '</span><span class="muted">Indikator awal</span></div><div class="mini-progress"><span style="width:' . $score . '%"></span></div></article><article class="stat-card"><div class="stat-top"><span class="stat-label">TIM & KELOMPOK</span><span class="stat-icon blue">♧</span></div><div class="stat-number">' . count($groups) . '<small> kelompok</small></div><div class="stat-foot"><span class="pill blue-pill">Workspace</span><span class="muted">yang kamu ikuti</span></div></article><article class="stat-card"><div class="stat-top"><span class="stat-label">TUGAS SELESAI</span><span class="stat-icon green">✓</span></div><div class="stat-number">' . $done . '<small> / ' . count($tasks) . '</small></div><div class="stat-foot"><span class="pill green-pill">' . $completion . '% selesai</span><span class="muted">progres WBS</span></div><div class="mini-progress green-progress"><span style="width:' . $completion . '%"></span></div></article><article class="stat-card"><div class="stat-top"><span class="stat-label">AKTIVITAS TERCATAT</span><span class="stat-icon orange">⌁</span></div><div class="stat-number">' . count($mine) . '<small> event</small></div><div class="stat-foot"><span class="pill orange-pill">' . $verified . ' terverifikasi</span><span class="muted">telemetri dari Supabase</span></div></article></div>';
 
-echo '<div class="content-grid dashboard-grid"><section class="panel chart-panel"><div class="panel-heading"><div><div class="panel-title">Tren kontribusi</div><div class="panel-sub">Aktivitas mingguan dari telemetri yang tercatat</div></div><a class="text-link" href="' . ($teacher ? 'classroom.php' : 'contributions.php') . '">Detail kontribusi ↗</a></div><div class="chart-legend"><span><i></i> ' . ($teacher ? 'Aktivitas kelompok' : 'Aktivitas kamu') . '</span><span class="legend-muted">7 hari terakhir</span></div><div class="chart-area"><div class="chart-y">' . $chartYLabels . '</div><svg viewBox="0 0 640 180" preserveAspectRatio="none" role="img" aria-label="Grafik tren kontribusi"><defs><linearGradient id="area" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#7868ff" stop-opacity=".24"/><stop offset="100%" stop-color="#7868ff" stop-opacity="0"/></linearGradient></defs><path d="' . $svgArea . '" fill="url(#area)"/><path d="' . $svgPath . '" fill="none" stroke="#7564f7" stroke-width="3" stroke-linecap="round"/></svg></div><div class="chart-x">' . $chartXLabels . '</div><div class="chart-note">' . ($maxCount > 0 ? 'Data diperbarui otomatis dari log telemetri Supabase.' : 'Belum ada aktivitas tercatat dalam 7 hari terakhir.') . '</div></section><section class="panel factor-panel"><div class="panel-heading"><div><div class="panel-title">Faktor WEI</div><div class="panel-sub">Komponen indeks kontribusi</div></div><span class="help-dot" title="WEI merupakan indikator pendukung, bukan nilai akhir mata kuliah">?</span></div><div class="factor-item"><div class="factor-head"><span>Volume aktivitas</span><b>' . min(100, count($mine) * 12) . '%</b></div><div class="factor-track"><span style="width:' . min(100, count($mine) * 12) . '%"></span></div></div><div class="factor-item"><div class="factor-head"><span>Konsistensi temporal</span><b>' . min(100, count(array_unique(array_column($mine, 'date'))) * 15) . '%</b></div><div class="factor-track"><span style="width:' . min(100, count(array_unique(array_column($mine, 'date'))) * 15) . '%;background:#55b7c5"></span></div></div><div class="factor-item"><div class="factor-head"><span>Tugas terselesaikan</span><b>' . $completion . '%</b></div><div class="factor-track"><span style="width:' . $completion . '%;background:#e8ac54"></span></div></div><div class="factor-callout"><span>✦</span><p>Indikator awal dihitung dari data telemetry tersimpan. Formula WEI final dan sinkronisasi API masih perlu divalidasi.</p></div></section></div>';
+echo '<div class="stats-grid"><article class="stat-card"><div class="stat-top"><span class="stat-label">' . ($teacher ? 'KELOMPOK TERPANTAU' : 'WEI SCORE') . '</span><span class="stat-icon violet">◈</span></div><div class="stat-number">' . ($teacher ? count($groups) : number_format($score, 1)) . '<small>' . ($teacher ? ' kelompok' : '/100') . '</small></div><div class="stat-foot"><span class="pill purple">' . ($teacher ? 'Mode pemantauan' : 'Aktivitas tersimpan') . '</span><span class="muted">Indikator awal</span></div><div class="mini-progress"><span style="width:' . $score . '%"></span></div></article><article class="stat-card"><div class="stat-top"><span class="stat-label">TIM & KELOMPOK</span><span class="stat-icon blue">♧</span></div><div class="stat-number">' . count($groups) . '<small> kelompok</small></div><div class="stat-foot"><span class="pill blue-pill">Workspace</span><span class="muted">yang kamu ikuti</span></div></article><article class="stat-card"><div class="stat-top"><span class="stat-label">TUGAS SELESAI</span><span class="stat-icon green">✓</span></div><div class="stat-number">' . $done . '<small> / ' . count($tasks) . '</small></div><div class="stat-foot"><span class="pill green-pill">' . $completion . '% selesai</span><span class="muted">progres WBS</span></div><div class="mini-progress green-progress"><span style="width:' . $completion . '%"></span></div></article><article class="stat-card"><div class="stat-top"><span class="stat-label">AKTIVITAS TERCATAT</span><span class="stat-icon orange">⌁</span></div><div class="stat-number">' . count($activity) . '<small> event</small></div><div class="stat-foot"><span class="pill orange-pill">' . count($activity) . ' tercatat</span><span class="muted">log aktivitas lokal</span></div></article></div>';
+
+echo '<div class="content-grid dashboard-grid"><section class="panel chart-panel"><div class="panel-heading"><div><div class="panel-title">Tren kontribusi</div><div class="panel-sub">Aktivitas mingguan dari telemetri dan log tugas</div></div><a class="text-link" href="' . ($teacher ? 'classroom.php' : 'contributions.php') . '">Detail kontribusi ↗</a></div><div class="chart-legend"><span><i></i> ' . ($teacher ? 'Aktivitas kelompok' : 'Aktivitas kamu') . '</span><span class="legend-muted">7 hari terakhir</span></div><div class="chart-area"><div class="chart-y">' . $chartYLabels . '</div><svg viewBox="0 0 640 180" preserveAspectRatio="none" role="img" aria-label="Grafik tren kontribusi"><defs><linearGradient id="area" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#7868ff" stop-opacity=".24"/><stop offset="100%" stop-color="#7868ff" stop-opacity="0"/></linearGradient></defs><path d="' . $svgArea . '" fill="url(#area)"/><path d="' . $svgPath . '" fill="none" stroke="#7564f7" stroke-width="3" stroke-linecap="round"/></svg></div><div class="chart-x">' . $chartXLabels . '</div><div class="chart-note">' . ($maxCount > 0 ? 'Data diperbarui otomatis dari log aktivitas workspace kamu.' : 'Belum ada aktivitas tercatat dalam 7 hari terakhir.') . '</div></section><section class="panel factor-panel"><div class="panel-heading"><div><div class="panel-title">Faktor WEI</div><div class="panel-sub">Komponen indeks kontribusi</div></div><span class="help-dot" title="WEI merupakan indikator pendukung, bukan nilai akhir mata kuliah">?</span></div><div class="factor-item"><div class="factor-head"><span>Volume aktivitas</span><b>' . min(100, count($activity) * 20) . '%</b></div><div class="factor-track"><span style="width:' . min(100, count($activity) * 20) . '%"></span></div></div><div class="factor-item"><div class="factor-head"><span>Konsistensi temporal</span><b>' . min(100, count(array_unique(array_map(fn($a) => substr((string)($a['time'] ?? ''), 0, 10), $activity))) * 25) . '%</b></div><div class="factor-track"><span style="width:' . min(100, count(array_unique(array_map(fn($a) => substr((string)($a['time'] ?? ''), 0, 10), $activity))) * 25) . '%;background:#55b7c5"></span></div></div><div class="factor-item"><div class="factor-head"><span>Tugas terselesaikan</span><b>' . $completion . '%</b></div><div class="factor-track"><span style="width:' . $completion . '%;background:#e8ac54"></span></div></div><div class="factor-callout"><span>✦</span><p>Indikator awal dihitung dari log aktivitas tersimpan. Formula WEI final dan sinkronisasi API masih perlu divalidasi.</p></div></section></div>';
 
 echo '<div class="content-grid lower-grid"><section class="panel"><div class="panel-heading"><div><div class="panel-title">Tugas yang perlu diperhatikan</div><div class="panel-sub">Ringkasan Work Breakdown Structure</div></div><a class="text-link" href="tasks.php">Lihat semua ↗</a></div>';
 if (!$tasks) {
