@@ -3787,3 +3787,17 @@ button {
     width: min(260px, calc(100vw - 20px));
   }
 }
+
+/* ==========================================================================
+   FIX: TEXTAREA OVERFLOW & RESIZE CONSTRAINT
+   ========================================================================== */
+textarea,
+.side-form textarea,
+.task-create-panel textarea,
+.form-group textarea {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-height: 80px;
+  resize: vertical; /* Hanya izinkan resize ke atas-bawah, cegah jebol ke samping */
+}

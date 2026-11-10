@@ -34,7 +34,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $user = array_merge($user, $dbUser);
-        $_SESSION['user'] = $user;
         $teacher = is_teacher($user);
 
         if ($action === 'create' && !$teacher) {
@@ -429,7 +428,11 @@ if ($error) {
                 <input name="name" required maxlength="150" placeholder="Contoh: Kelompok 01 - Smart App">
 
                 <label>Deskripsi Proyek (Opsional)</label>
-                <textarea name="description" rows="2" placeholder="Topik atau gambaran proyek kelompok..."></textarea>
+                <textarea 
+                    name="description" 
+                    rows="3" 
+                    style="width: 100%; max-width: 100%; box-sizing: border-box; resize: vertical; min-height: 80px;" 
+                    placeholder="Topik atau gambaran proyek kelompok..."></textarea>
 
                 <small class="muted" style="display:block; margin:6px 0 14px;">
                     Kamu otomatis menjadi anggota dan Project Manager (ketua) kelompok ini.

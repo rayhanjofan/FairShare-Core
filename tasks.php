@@ -448,7 +448,11 @@ $inProgCount = count(array_filter($allUserTasks, fn($t) => ($t['status_db'] ?? '
 
             <div class="field-wide">
                 <label>Deskripsi / Instruksi Pengerjaan</label>
-                <textarea name="description" rows="2" placeholder="Detail kriteria tugas, batasan teknis, atau dokumen rujukan..."></textarea>
+                <textarea 
+                    name="description" 
+                    rows="3" 
+                    style="width: 100%; max-width: 100%; box-sizing: border-box; resize: vertical; min-height: 80px;" 
+                    placeholder="Detail kriteria tugas, batasan teknis, atau dokumen rujukan..."></textarea>
             </div>
 
             <?php if ($teacher): ?>
