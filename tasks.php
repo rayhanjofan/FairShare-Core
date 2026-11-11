@@ -283,6 +283,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     redirect('tasks.php');
                 }
             }
+        } elseif ($action === 'delete') {
+            $id = trim((string) ($_POST['id'] ?? ''));
+
+            if (!valid_uuid($id)) {
+                $error = 'ID tugas tidak valid.';
+            } else {
+                $taskStmt = $pdo->prepare("
+                    SELECT t.id::text AS id, t.title, t.group_id::text AS group_id, g.parent_group_id::text AS parent_group_id
+                    FROM public.tasks t
+                    JOIN public.groups g ON g.id = t.group_id
+                    WHERE t.id = CAST(:id AS uuid)
+                    LIMIT 1
+                ");
+                $taskStmt->execute(['id' => $id]);
+                $task = $taskStmt->fetch(PDO::FETCH_ASSOC);
+
+                $allowedGroups = array_map('strtolower', array_column($groups, 'id'));
+                if (!$task || !in_array(strtolower((string) $task['group_id']), $allowedGroups, true)) {
+                    $error = 'Tugas tidak ditemukan atau kamu tidak memiliki akses untuk menghapus tugas ini.';
+                } else {
+                    $pdo->beginTransaction();
+
+                    $delTelemetry = $pdo->prepare("DELETE FROM public.telemetry_logs WHERE task_id = CAST(:id AS uuid)");
+                    $delTelemetry->execute(['id' => $id]);
+
+                    $delStmt = $pdo->prepare("DELETE FROM public.tasks WHERE id = CAST(:id AS uuid)");
+                    $delStmt->execute(['id' => $id]);
+
+                    $pdo->commit();
+
+                    log_activity('Tugas dihapus', (string) $task['title'], 'warning');
+                    flash('Tugas <b>' . e($task['title']) . '</b> berhasil dihapus.');
+                    redirect('tasks.php');
+                }
+            }
         }
     } catch (PDOException $e) {
         error_log('FairShare tasks SQLSTATE ' . $e->getCode() . ': ' . $e->getMessage());
@@ -382,10 +417,32 @@ $inProgCount = count(array_filter($allUserTasks, fn($t) => ($t['status_db'] ?? '
                         <span class="task-tag"><?= e($t['weight']) ?>× bobot</span>
                         <span class="pill blue-pill" style="font-size:9px;"><?= e($t['group_name'] ?? 'Kelompok') ?></span>
                         <?php if (($t['task_type'] ?? '') === 'gdocs'): ?>
-                            <span class="pill" style="font-size:9px; background:#e8f5e9; color:#1b5e20;">📄 Google Docs</span>
+                            <span class="pill" style="font-size:9px; background:#e8f5e9; color:#1b5e20;">📄 Docs</span>
                         <?php elseif (($t['task_type'] ?? '') === 'github'): ?>
-                            <span class="pill" style="font-size:9px; background:#f3e8ff; color:#6b21a8;">🐙 GitHub</span>
+                            <span class="pill" style="font-size:9px; background:#f3e8ff; color:#6b21a8;">🐙 Git</span>
                         <?php endif; ?>
+
+                        <div class="task-dropdown-wrap">
+                            <button type="button" class="task-dropdown-trigger" title="Opsi tugas" onclick="toggleTaskMenu('<?= $tid ?>', event)">
+                                •••
+                            </button>
+                            <div class="task-dropdown-menu" id="taskMenu-<?= $tid ?>" hidden>
+                                <a class="task-dropdown-item" href="task_detail.php?id=<?= urlencode((string) $t['id']) ?>">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                    <span>Lihat Detail & Audit</span>
+                                </a>
+                                <div class="task-dropdown-divider"></div>
+                                <form method="post" onsubmit="return confirm('Apakah kamu yakin ingin menghapus tugas ini? Data telemetry terkait juga akan dibersihkan.');">
+                                    <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
+                                    <input type="hidden" name="action" value="delete">
+                                    <input type="hidden" name="id" value="<?= $tid ?>">
+                                    <button type="submit" class="task-dropdown-item danger">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                        <span>Hapus Tugas</span>
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
                     </div>
                     <h3><a href="task_detail.php?id=<?= urlencode((string) $t['id']) ?>" style="color:inherit; text-decoration:none;"><?= e($t['title']) ?></a></h3>
                     <?php if (!empty($t['description'])): ?>
@@ -410,9 +467,6 @@ $inProgCount = count(array_filter($allUserTasks, fn($t) => ($t['status_db'] ?? '
                                 <?php endforeach; ?>
                             </select>
                         </form>
-                    </div>
-                    <div style="margin-top:8px; border-top:1px dashed #f1f2f6; padding-top:6px; text-align:right;">
-                        <a href="task_detail.php?id=<?= urlencode((string) $t['id']) ?>" style="font-size:11px; color:#4f46e5; font-weight:600; text-decoration:none;">Detail & Audit Tugas →</a>
                     </div>
                 </article>
             <?php endforeach; ?>
@@ -581,6 +635,31 @@ function toggleTaskResourceInputs() {
         input.value = "";
     }
 }
+
+function toggleTaskMenu(taskId, event) {
+    if (event) {
+        event.stopPropagation();
+    }
+    var menu = document.getElementById('taskMenu-' + taskId);
+    if (!menu) return;
+
+    var isHidden = menu.hidden;
+    // Tutup dropdown lain yang sedang terbuka
+    document.querySelectorAll('.task-dropdown-menu').forEach(function(m) {
+        m.hidden = true;
+    });
+
+    menu.hidden = !isHidden;
+}
+
+// Tutup menu jika klik di luar
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.task-dropdown-wrap')) {
+        document.querySelectorAll('.task-dropdown-menu').forEach(function(m) {
+            m.hidden = true;
+        });
+    }
+});
 </script>
 
 <?php layout_end(); ?>
