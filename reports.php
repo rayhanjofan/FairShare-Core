@@ -25,20 +25,29 @@ $teamIds = array_column($teams, 'id');
 $allTasks = all_tasks();
 $allTelemetry = all_telemetry(null, $teamIds);
 
-// Buat rekap kontribusi per mahasiswa
+// Buat rekap kontribusi per mahasiswa menggunakan engine WEI FairShare
 $reportRows = [];
 foreach ($teams as $t) {
     $tid = $t['id'];
     $teamTasks = array_values(array_filter($allTasks, fn($tk) => ($tk['group_id'] ?? '') === $tid));
     $teamDoneTasks = count(array_filter($teamTasks, fn($tk) => ($tk['status_db'] ?? '') === 'done'));
 
+    // Hitung distribusi kontribusi terbobot (WEI) kelompok
+    $groupWei = fs_calculate_group_wei((string) $tid, $pdo);
+
     foreach (($t['members'] ?? []) as $m) {
         $uid = $m['user_id'];
         $userTelemetry = array_values(array_filter($allTelemetry, fn($tl) => strtolower((string) ($tl['user_id'] ?? '')) === strtolower((string) $uid) && ($tl['group_id'] ?? '') === $tid));
         $githubEvents = count(array_filter($userTelemetry, fn($tl) => ($tl['source'] ?? '') === 'github'));
         $gdocsEvents = count(array_filter($userTelemetry, fn($tl) => ($tl['source'] ?? '') === 'gdocs'));
-        $totalPoints = array_sum(array_column($userTelemetry, 'points'));
-        $assignedTasks = count(array_filter($teamTasks, fn($tk) => strtolower((string) ($tk['assigned_user_id'] ?? '')) === strtolower((string) $uid)));
+        
+        $mWei = $groupWei['members'][$uid] ?? null;
+        $rawDeltaTotal = $mWei ? (float) $mWei['raw_delta_total'] : array_sum(array_column($userTelemetry, 'raw_delta'));
+        $filteredDeltaTotal = $mWei ? (float) $mWei['filtered_delta_total'] : array_sum(array_column($userTelemetry, 'filtered_delta'));
+        
+        $weiVal = $mWei && $mWei['wei_percent'] !== null ? round((float) $mWei['wei_percent'], 1) : null;
+        $weiFormatted = $mWei ? $mWei['wei_formatted'] : 'Belum cukup data';
+        $dataStatus = $groupWei['has_sufficient_data'] ? 'Cukup Data' : 'Belum Cukup Data';
 
         $reportRows[] = [
             'user_id'         => $uid,
@@ -53,8 +62,14 @@ foreach ($teams as $t) {
             'github_events'   => $githubEvents,
             'gdocs_events'    => $gdocsEvents,
             'total_events'    => count($userTelemetry),
-            'total_points'    => round($totalPoints, 2),
-            'wei_indicator'   => score_for_user($uid, $tid),
+            'raw_delta'       => round($rawDeltaTotal, 2),
+            'filtered_delta'  => round($filteredDeltaTotal, 2),
+            'total_points'    => round($filteredDeltaTotal, 2),
+            'wei_val'         => $weiVal,
+            'wei_indicator'   => $weiVal ?? 0.0,
+            'wei_formatted'   => $weiFormatted,
+            'data_status'     => $dataStatus,
+            'has_sufficient'  => $groupWei['has_sufficient_data'],
             'team_task_done'  => "$teamDoneTasks / " . count($teamTasks),
         ];
     }
@@ -65,7 +80,22 @@ if (($_GET['export'] ?? '') === 'csv') {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="fairshare-laporan-audit-' . date('Ymd-His') . '.csv"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['Nama Mahasiswa', 'NIM', 'Email', 'Kelas', 'Kelompok', 'Peran', 'Event GitHub', 'Event Google Docs', 'Total Event', 'Poin Delta', 'Indikator WEI', 'Progres Tugas Tim']);
+    fputcsv($out, [
+        'Nama Mahasiswa',
+        'NIM',
+        'Email',
+        'Kelas',
+        'Kelompok',
+        'Peran',
+        'Event GitHub',
+        'Event Google Docs',
+        'Total Event',
+        'Raw Delta',
+        'Filtered Delta',
+        'Indikator WEI',
+        'Status Data',
+        'Progres Tugas Tim'
+    ]);
     foreach ($reportRows as $r) {
         fputcsv($out, [
             $r['name'],
@@ -77,8 +107,10 @@ if (($_GET['export'] ?? '') === 'csv') {
             $r['github_events'],
             $r['gdocs_events'],
             $r['total_events'],
-            $r['total_points'],
-            $r['wei_indicator'],
+            $r['raw_delta'],
+            $r['filtered_delta'],
+            $r['wei_formatted'],
+            $r['data_status'],
             $r['team_task_done'],
         ]);
     }
@@ -156,10 +188,11 @@ page_heading(
                         <th>Mahasiswa & NIM</th>
                         <th>Kelas & Kelompok</th>
                         <th>Peran</th>
-                        <th>Aktivitas GitHub</th>
-                        <th>Aktivitas Docs</th>
-                        <th>Total Poin Delta</th>
+                        <th>Aktivitas Terdata</th>
+                        <th>Raw Delta</th>
+                        <th>Filtered Delta</th>
                         <th>Indikator WEI</th>
+                        <th>Status Data</th>
                         <th>Progres Tim</th>
                     </tr>
                 </thead>
@@ -179,22 +212,37 @@ page_heading(
                                     <?= e($r['role_in_team']) ?>
                                 </span>
                             </td>
-                            <td><b><?= $r['github_events'] ?></b> event</td>
-                            <td><b><?= $r['gdocs_events'] ?></b> event</td>
-                            <td><b><?= $r['total_points'] ?></b> pts</td>
                             <td>
-                                <div style="display:flex; align-items:center; gap:6px;">
-                                    <div class="mini-progress" style="width:50px;">
-                                        <span style="width:<?= min(100, $r['wei_indicator']) ?>%"></span>
+                                <small>Docs: <b><?= $r['gdocs_events'] ?></b> | Git: <b><?= $r['github_events'] ?></b></small>
+                                <div style="font-size:10px; color:#64748b; margin-top:2px;"><?= $r['total_events'] ?> total event</div>
+                            </td>
+                            <td><?= number_format($r['raw_delta'], 2) ?></td>
+                            <td><b><?= number_format($r['filtered_delta'], 2) ?></b></td>
+                            <td>
+                                <?php if ($r['has_sufficient'] && $r['wei_val'] !== null): ?>
+                                    <div style="display:flex; align-items:center; gap:6px;">
+                                        <div class="mini-progress" style="width:50px;">
+                                            <span style="width:<?= min(100, $r['wei_val']) ?>%"></span>
+                                        </div>
+                                        <small><b><?= number_format($r['wei_val'], 1) ?>%</b></small>
                                     </div>
-                                    <small><b><?= $r['wei_indicator'] ?></b>/100</small>
-                                </div>
+                                <?php else: ?>
+                                    <span class="muted" style="font-size:11px;">Belum cukup data</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <span class="status-badge <?= $r['has_sufficient'] ? 'good' : 'waiting' ?>" style="font-size:10px;">
+                                    <?= e($r['data_status']) ?>
+                                </span>
                             </td>
                             <td><small><?= e($r['team_task_done']) ?> tuntas</small></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
             </table>
+        </div>
+        <div style="margin-top:16px; padding:12px 16px; background:#f8fafc; border-radius:8px; border:1px solid #e2e8f0; font-size:11px; color:#475569; line-height:1.5;">
+            💡 <b>Catatan Integritas WEI (Weighted Effort Index):</b> WEI adalah indikator proporsi kontribusi aktivitas kolaboratif yang berhasil dikumpulkan dan divalidasi FairShare terhadap tugas berbobot kelompok, bukan penilaian kualitas akademik otomatis.
         </div>
     <?php endif; ?>
 </section>

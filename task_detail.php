@@ -116,6 +116,30 @@ if (!$task || !sa_can_access_task($task, $user)) {
 $canManageResource = sa_can_manage_task_resource($task, $user);
 $activities = sa_task_activities($taskId, 100);
 $integration = fs_google_integration((string) $user['id']);
+$taskWei = fs_calculate_task_wei($taskId);
+
+$validEventsCount = 0;
+$pendingEventsCount = 0;
+$rejectedEventsCount = 0;
+$sumRawDelta = 0.0;
+$sumFilteredDelta = 0.0;
+
+foreach ($activities as $actItem) {
+    $m = $actItem['metadata'] ?? [];
+    $vStat = strtolower(trim((string) ($m['validation_status'] ?? '')));
+    $rawVal = (float) ($actItem['raw_delta'] ?? 1.0);
+    $filtVal = (float) ($actItem['filtered_delta'] ?? 0.0);
+    $sumRawDelta += $rawVal;
+    $sumFilteredDelta += $filtVal;
+
+    if ($vStat === 'valid' || $vStat === 'terverifikasi') {
+        $validEventsCount++;
+    } elseif ($vStat === 'pending' || $vStat === 'menunggu kalibrasi bobot') {
+        $pendingEventsCount++;
+    } else {
+        $rejectedEventsCount++;
+    }
+}
 
 $formatUtcToLocal = static function (?string $value, string $format = 'd M Y H:i:s'): string {
     if ($value === null || trim($value) === '') {
@@ -368,11 +392,61 @@ if ($error !== '') {
     <section class="panel">
         <div class="panel-heading">
             <div>
-                <div class="panel-title">Riwayat Kontribusi & Aktivitas Pengerjaan</div>
-                <div class="panel-sub">Data aktivitas telemetry yang berhasil tercatat untuk tugas kelompok ini.</div>
+                <div class="panel-title">Audit Validasi Aktivitas & Kontribusi Tugas (WEI)</div>
+                <div class="panel-sub">Transparansi keputusan validasi event Google Docs, Raw Delta, dan proporsi kontribusi tugas.</div>
             </div>
             <span class="counter"><?= count($activities) ?> aktivitas</span>
         </div>
+
+        <!-- STATISTIK RINGKAS TUGAS -->
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:20px; padding:12px 16px; background:#f8fafc; border-radius:10px; border:1px solid #e2e8f0;">
+            <div>
+                <span class="muted" style="font-size:11px; font-weight:700;">TOTAL FILTERED DELTA:</span>
+                <div style="font-size:18px; font-weight:800; color:#10b981;"><?= number_format($sumFilteredDelta, 2) ?></div>
+            </div>
+            <div>
+                <span class="muted" style="font-size:11px; font-weight:700;">TOTAL RAW DELTA:</span>
+                <div style="font-size:18px; font-weight:800; color:#3b82f6;"><?= number_format($sumRawDelta, 2) ?></div>
+            </div>
+            <div>
+                <span class="muted" style="font-size:11px; font-weight:700;">EVENT VALID:</span>
+                <div style="font-size:18px; font-weight:800; color:#10b981;">✓ <?= $validEventsCount ?></div>
+            </div>
+            <div>
+                <span class="muted" style="font-size:11px; font-weight:700;">EVENT PENDING:</span>
+                <div style="font-size:18px; font-weight:800; color:#f59e0b;">⏳ <?= $pendingEventsCount ?></div>
+            </div>
+            <div>
+                <span class="muted" style="font-size:11px; font-weight:700;">EVENT DITOLAK:</span>
+                <div style="font-size:18px; font-weight:800; color:#ef4444;">✕ <?= $rejectedEventsCount ?></div>
+            </div>
+        </div>
+
+        <!-- DISTRIBUSI KONTRIBUSI WEI TUGAS -->
+        <?php if (!empty($taskWei['members'])): ?>
+            <div style="margin-bottom:24px; padding:16px; background:#fff; border-radius:10px; border:1px solid #e2e8f0;">
+                <b style="font-size:12px; color:#1e293b; display:block; margin-bottom:10px;">
+                    📊 Distribusi Kontribusi Relatif Tugas Ini (Bobot: <?= (int)$taskWei['weight'] ?>×)
+                </b>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">
+                    <?php foreach ($taskWei['members'] as $m): ?>
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px;">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <b style="font-size:12px; color:#334155;"><?= e($m['name']) ?></b>
+                                <b style="font-size:13px; color:#4338ca;"><?= number_format((float)$m['wei_percent'], 1) ?>%</b>
+                            </div>
+                            <div class="mini-progress" style="height:5px; margin:6px 0; background:#e2e8f0;">
+                                <span style="width:<?= min(100, (float)$m['wei_percent']) ?>%; background:#6366f1;"></span>
+                            </div>
+                            <div style="font-size:10px; color:#64748b; display:flex; justify-content:space-between;">
+                                <span>Filtered: <b><?= number_format((float)$m['filtered_delta'], 1) ?></b></span>
+                                <span>Valid: <b><?= (int)($m['valid_events'] ?? 0) ?></b> event</span>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
 
         <?php if (!$activities): ?>
             <div class="empty-state">
@@ -390,6 +464,8 @@ if ($error !== '') {
                             <th>Waktu Pengerjaan</th>
                             <th>Raw Delta</th>
                             <th>Filtered Delta</th>
+                            <th>Status Validasi</th>
+                            <th>Indikator</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -398,6 +474,16 @@ if ($error !== '') {
                             $meta = $act['metadata'];
                             $eventTitle = (string) ($meta['event_type'] ?? $meta['action'] ?? 'Aktivitas');
                             $description = (string) ($meta['description'] ?? $meta['commit_message'] ?? $meta['document_title'] ?? '');
+                            $valStatus = strtolower(trim((string) ($meta['validation_status'] ?? '')));
+                            $valReason = $meta['validation_reason'] ?? null;
+                            $isValid = in_array($valStatus, ['valid', 'terverifikasi'], true) && (float) $act['filtered_delta'] > 0;
+                            
+                            $badgeClass = 'waiting';
+                            if ($isValid) {
+                                $badgeClass = 'good';
+                            } elseif (in_array($valStatus, ['rejected', 'duplicate'], true)) {
+                                $badgeClass = 'danger';
+                            }
                             ?>
                             <tr>
                                 <td><b><?= e($act['user_name'] ?? 'Belum teridentifikasi') ?></b></td>
@@ -413,8 +499,25 @@ if ($error !== '') {
                                     <?php endif; ?>
                                 </td>
                                 <td><?= e($formatUtcToLocal((string) $act['activity_timestamp'], 'd M Y H:i:s')) ?></td>
-                                <td><?= e((string) $act['raw_delta']) ?></td>
-                                <td><b><?= e((string) $act['filtered_delta']) ?></b></td>
+                                <td><?= number_format((float) ($act['raw_delta'] ?? 1.0), 2) ?></td>
+                                <td><b><?= number_format((float) ($act['filtered_delta'] ?? 0.0), 2) ?></b></td>
+                                <td>
+                                    <span class="status-badge <?= $badgeClass ?>" style="font-size:10px;">
+                                        <?= e($valStatus !== '' ? ucfirst($valStatus) : 'Tercatat') ?>
+                                    </span>
+                                    <?php if (!empty($valReason)): ?>
+                                        <div style="font-size:10px; color:#ef4444; margin-top:2px;">
+                                            <?= e(fs_validation_reason_text($valReason)) ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?php if ($isValid): ?>
+                                        <span style="color:#10b981; font-weight:800; font-size:12px;" title="Lolos validasi FairShare (Dihitung)">✓ Lolos</span>
+                                    <?php else: ?>
+                                        <span style="color:#94a3b8; font-weight:700; font-size:11px;" title="Tidak lolos validasi (Tidak dihitung)">✕ Diabaikan</span>
+                                    <?php endif; ?>
+                                </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>

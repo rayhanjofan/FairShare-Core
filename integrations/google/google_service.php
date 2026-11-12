@@ -587,8 +587,8 @@ function fs_google_event_external_id(
 
 /**
  * Query each connected member's view of a task document. Only actions marked
- * isCurrentUser=true are attributed to that member. Events stay raw (filtered_delta=0)
- * until FairShare's scoring rules are formally calibrated.
+ * isCurrentUser=true are attributed to that member. Events are strictly validated
+ * through FairShare's 14 validation criteria (producing raw_delta=1.0 and filtered_delta=1.0 when valid).
  */
 function fs_google_sync_task(string $taskId): array
 {
@@ -596,7 +596,23 @@ function fs_google_sync_task(string $taskId): array
         throw new InvalidArgumentException('ID tugas tidak valid.');
     }
     $pdo = require_db();
-    $taskStmt = $pdo->prepare("SELECT t.id::text AS id, t.group_id::text AS group_id, t.task_type, t.external_resource_id, t.created_at::text AS created_at, t.sync_state::text AS sync_state FROM public.tasks t JOIN public.groups team ON team.id = t.group_id AND team.group_type = 'team' WHERE t.id = CAST(:task_id AS UUID) LIMIT 1");
+    $taskStmt = $pdo->prepare("
+        SELECT
+            t.id::text AS id,
+            t.group_id::text AS group_id,
+            t.task_type,
+            t.external_resource_id,
+            t.created_at::text AS created_at,
+            t.sync_state::text AS sync_state,
+            team.group_type,
+            team.parent_group_id::text AS parent_group_id,
+            class.group_type AS parent_class_type
+        FROM public.tasks t
+        JOIN public.groups team ON team.id = t.group_id AND team.group_type = 'team'
+        LEFT JOIN public.groups class ON class.id = team.parent_group_id
+        WHERE t.id = CAST(:task_id AS UUID)
+        LIMIT 1
+    ");
     $taskStmt->execute(['task_id' => $taskId]);
     $task = $taskStmt->fetch(PDO::FETCH_ASSOC);
     if (!$task || $task['task_type'] !== 'gdocs' || empty($task['external_resource_id'])) {
@@ -606,6 +622,18 @@ function fs_google_sync_task(string $taskId): array
     $memberStmt = $pdo->prepare("SELECT gm.user_id::text AS user_id FROM public.group_members gm JOIN public.users u ON u.id = gm.user_id WHERE gm.group_id = CAST(:group_id AS UUID) AND u.role = 'mahasiswa' ORDER BY gm.joined_at ASC");
     $memberStmt->execute(['group_id' => $task['group_id']]);
     $members = $memberStmt->fetchAll(PDO::FETCH_COLUMN);
+
+    $taskContext = [
+        'task_id' => $taskId,
+        'task_type' => $task['task_type'],
+        'external_resource_id' => $task['external_resource_id'],
+        'group_id' => $task['group_id'],
+        'group_type' => $task['group_type'] ?? 'team',
+        'parent_group_id' => $task['parent_group_id'] ?? '',
+        'parent_class_type' => $task['parent_class_type'] ?? '',
+        'member_ids' => array_map('strval', $members),
+    ];
+
     $state = json_decode((string) ($task['sync_state'] ?? '{}'), true);
     if (!is_array($state)) {
         $state = [];
@@ -675,6 +703,24 @@ function fs_google_sync_task(string $taskId): array
                         $action,
                         (int) $actionIndex
                     );
+
+                    // Jalankan validasi event secara komprehensif
+                    $eventData = [
+                        'source' => 'gdocs',
+                        'task_id' => $taskId,
+                        'group_id' => $task['group_id'],
+                        'user_id' => (string) $memberId,
+                        'action_type' => $actionType,
+                        'external_id' => $externalId,
+                        'document_id' => (string) $task['external_resource_id'],
+                        'activity_timestamp' => $activityTime,
+                        'actor_attributed' => true,
+                        'attribution_method' => 'oauth_is_current_user',
+                        'is_current_user' => true,
+                        'raw_delta' => 1.0,
+                    ];
+                    $validation = fs_validate_telemetry_event($eventData, $taskContext, $pdo);
+
                     $metadata = [
                         'provider' => 'google_drive_activity',
                         'event_type' => $actionType,
@@ -683,16 +729,35 @@ function fs_google_sync_task(string $taskId): array
                         'actor_person_name' => $personName,
                         'actor_attributed' => true,
                         'attribution_method' => 'oauth_is_current_user',
-                        'validation_status' => 'Menunggu kalibrasi bobot',
-                        'description' => 'Aktivitas ' . $actionType . ' teramati melalui Google Drive Activity API.',
+                        'validation_status' => $validation['validation_status'],
+                        'validation_reason' => $validation['validation_reason'],
+                        'validation_version' => $validation['validation_version'],
+                        'validated_at' => $validation['validated_at'],
+                        'description' => 'Aktivitas ' . $actionType . ' (' . ($validation['is_valid'] ? 'valid' : 'tidak lolos validasi') . ') teramati melalui Google Drive Activity API.',
+                        'activity_concept' => 'Detected Activity Event',
                     ];
-                    $insert = $pdo->prepare("INSERT INTO public.telemetry_logs (task_id, group_id, user_id, source, external_id, activity_timestamp, raw_delta, filtered_delta, metadata, created_at) VALUES (CAST(:task_id AS UUID), CAST(:group_id AS UUID), CAST(:user_id AS UUID), 'gdocs', :external_id, :activity_timestamp, 1, 0, CAST(:metadata AS JSONB), CURRENT_TIMESTAMP) ON CONFLICT DO NOTHING");
+
+                    $insert = $pdo->prepare("
+                        INSERT INTO public.telemetry_logs (
+                            task_id, group_id, user_id, source, external_id,
+                            activity_timestamp, raw_delta, filtered_delta, metadata, created_at
+                        ) VALUES (
+                            CAST(:task_id AS UUID), CAST(:group_id AS UUID), CAST(:user_id AS UUID),
+                            'gdocs', :external_id, :activity_timestamp,
+                            :raw_delta, :filtered_delta, CAST(:metadata AS JSONB), CURRENT_TIMESTAMP
+                        ) ON CONFLICT (task_id, source, external_id) DO UPDATE SET
+                            raw_delta = EXCLUDED.raw_delta,
+                            filtered_delta = EXCLUDED.filtered_delta,
+                            metadata = EXCLUDED.metadata
+                    ");
                     $insert->execute([
                         'task_id' => $taskId,
                         'group_id' => $task['group_id'],
                         'user_id' => $memberId,
                         'external_id' => $externalId,
                         'activity_timestamp' => $activityTime,
+                        'raw_delta' => $validation['raw_delta'],
+                        'filtered_delta' => $validation['filtered_delta'],
                         'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
                     ]);
                     $inserted += $insert->rowCount();

@@ -1,9 +1,12 @@
 <?php
 declare(strict_types=1);
 
-if (session_status() !== PHP_SESSION_ACTIVE) {
+if (session_status() !== PHP_SESSION_ACTIVE && php_sapi_name() !== 'cli') {
     session_start();
 }
+
+require_once __DIR__ . '/telemetry_validator.php';
+require_once __DIR__ . '/contribution_engine.php';
 
 define('APP_NAME', 'FairShare');
 define('BASE_PATH', dirname(__DIR__));
@@ -762,6 +765,7 @@ function all_telemetry(?string $userId = null, ?array $groupIds = null): array
     $sql = "
         SELECT
             tl.id::text AS id,
+            tl.task_id::text AS task_id,
             tl.group_id::text AS group_id,
             tl.user_id::text AS user_id,
             tl.source,
@@ -802,15 +806,36 @@ function all_telemetry(?string $userId = null, ?array $groupIds = null): array
             $metadata = [];
         }
         $date = substr((string) $r['activity_timestamp'], 0, 10);
-        $status = (string) ($metadata['validation_status'] ?? 'Tercatat');
-        if (($metadata['entry_mode'] ?? '') === 'manual_test') {
+        $valStatus = strtolower(trim((string) ($metadata['validation_status'] ?? '')));
+        $entryMode = (string) ($metadata['entry_mode'] ?? '');
+        $valReason = $metadata['validation_reason'] ?? null;
+
+        if ($entryMode === 'manual_test') {
             $status = 'Catatan manual (belum diverifikasi)';
+        } elseif ($valStatus === 'valid' || $valStatus === 'terverifikasi') {
+            $status = 'Valid (Terverifikasi)';
+        } elseif ($valStatus === 'rejected') {
+            $status = 'Ditolak: ' . fs_validation_reason_text($valReason);
+        } elseif ($valStatus === 'pending' || $valStatus === 'menunggu kalibrasi bobot') {
+            $status = 'Menunggu Validasi';
+        } elseif ($valStatus === 'duplicate') {
+            $status = 'Duplikat (Ditolak)';
+        } elseif ($valStatus === 'unattributed') {
+            $status = 'Aktor Belum Teridentifikasi';
+        } else {
+            $status = $metadata['validation_status'] ?? 'Tercatat';
         }
+
         $r['metadata'] = $metadata;
         $r['title'] = $r['event_type'];
         $r['date'] = $date;
+        $r['raw_delta'] = (float) $r['raw_delta'];
+        $r['filtered_delta'] = (float) $r['filtered_delta'];
         $r['points'] = (float) $r['filtered_delta'];
         $r['status'] = $status;
+        $r['validation_status'] = $valStatus !== '' ? $valStatus : ($r['filtered_delta'] > 0 ? 'valid' : 'pending');
+        $r['validation_reason'] = $valReason;
+        $r['is_valid'] = in_array($valStatus, ['valid', 'terverifikasi'], true) && $r['filtered_delta'] > 0;
         $r['user'] = $r['user_name'] ?? 'Tidak diketahui';
         $r['detail'] = $metadata['description'] ?? '';
         $out[] = $r;
@@ -820,13 +845,21 @@ function all_telemetry(?string $userId = null, ?array $groupIds = null): array
 
 function score_for_user(string $userId, ?string $groupId = null): float
 {
-    $sum = 0.0;
-    foreach (all_telemetry($userId) as $row) {
-        if ($groupId === null || strtolower((string) $row['group_id']) === strtolower($groupId)) {
-            $sum += (float) $row['filtered_delta'];
-        }
+    if (!valid_uuid($userId)) {
+        return 0.0;
     }
-    return round(min(100.0, $sum), 1);
+
+    if ($groupId !== null && valid_uuid($groupId)) {
+        $wei = fs_calculate_group_wei($groupId);
+        if ($wei['has_sufficient_data'] && isset($wei['members'][$userId])) {
+            $memberWei = $wei['members'][$userId]['wei_percent'];
+            return $memberWei !== null ? round((float) $memberWei, 1) : 0.0;
+        }
+        return 0.0;
+    }
+
+    $overview = fs_member_wei_overview($userId);
+    return round((float) ($overview['overall_wei'] ?? 0.0), 1);
 }
 
 // ============================================================
