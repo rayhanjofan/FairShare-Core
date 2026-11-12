@@ -4072,3 +4072,504 @@ textarea,
   margin: 4px 0;
 }
 
+/* ============================================================
+   FAIRSHARE UNIVERSAL QUICK ACTION POPUP (+ Buat)
+   ============================================================ */
+.quick-action-wrap {
+  position: relative;
+  display: inline-block;
+}
+.quick-action-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  padding: 10px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(103, 84, 239, 0.28);
+  transition: all 0.2s ease;
+}
+.quick-action-trigger:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(103, 84, 239, 0.35);
+}
+.quick-action-trigger .action-caret {
+  font-size: 11px;
+  opacity: 0.85;
+  transition: transform 0.2s ease;
+}
+.quick-action-trigger.active .action-caret {
+  transform: rotate(180deg);
+}
+
+.quick-action-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 310px;
+  max-width: calc(100vw - 32px);
+  background: #ffffff;
+  border: 1px solid #e7e7f1;
+  border-radius: 14px;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.12), 0 4px 12px rgba(15, 23, 42, 0.06);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 60;
+  animation: qaMenuFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.quick-action-menu[hidden] {
+  display: none !important;
+}
+
+@keyframes qaMenuFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.quick-action-header {
+  padding: 6px 10px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #8a8ea6;
+  text-transform: uppercase;
+}
+
+.quick-action-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  text-decoration: none;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  box-sizing: border-box;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.quick-action-item:hover {
+  background: #f5f4fe;
+  transform: translateX(2px);
+}
+
+.quick-action-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.quick-action-icon.violet {
+  background: #edeaff;
+  color: #6754ef;
+}
+.quick-action-icon.blue {
+  background: #e1f2fe;
+  color: #0284c7;
+}
+.quick-action-icon.orange {
+  background: #fff0df;
+  color: #ea580c;
+}
+.quick-action-icon.green {
+  background: #e2f8ec;
+  color: #16a34a;
+}
+
+.quick-action-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.quick-action-text strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2238;
+}
+.quick-action-text span {
+  font-size: 11px;
+  color: #717590;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+/* ============================================================
+   MONITORING & AUDIT TABS (DOSEN)
+   ============================================================ */
+.monitoring-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 20px;
+  padding: 4px;
+  background: #f1f0f8;
+  border-radius: 12px;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.monitoring-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6c708c;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: all 0.18s ease;
+}
+.monitoring-tab:hover {
+  color: #22223c;
+  background: rgba(255, 255, 255, 0.6);
+}
+.monitoring-tab.active {
+  background: #ffffff;
+  color: #5141ce;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+.monitoring-tab .tab-icon {
+  font-size: 14px;
+}
+
+/* ============================================================
+   DARK MODE ADJUSTMENTS FOR QUICK ACTION & TABS
+   ============================================================ */
+:root[data-theme="dark"] .quick-action-menu {
+  background: #191b33;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="dark"] .quick-action-header {
+  color: #9297b4;
+}
+:root[data-theme="dark"] .quick-action-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .quick-action-text strong {
+  color: #f1f2fa;
+}
+:root[data-theme="dark"] .quick-action-text span {
+  color: #9aa0be;
+}
+:root[data-theme="dark"] .quick-action-icon.violet {
+  background: rgba(103, 84, 239, 0.22);
+  color: #9c8eff;
+}
+:root[data-theme="dark"] .quick-action-icon.blue {
+  background: rgba(2, 132, 199, 0.22);
+  color: #38bdf8;
+}
+:root[data-theme="dark"] .quick-action-icon.orange {
+  background: rgba(234, 88, 12, 0.22);
+  color: #fb923c;
+}
+:root[data-theme="dark"] .quick-action-icon.green {
+  background: rgba(22, 163, 74, 0.22);
+  color: #4ade80;
+}
+:root[data-theme="dark"] .monitoring-tabs {
+  background: #14162a;
+}
+:root[data-theme="dark"] .monitoring-tab {
+  color: #8e94b2;
+}
+:root[data-theme="dark"] .monitoring-tab:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .monitoring-tab.active {
+  background: #202342;
+  color: #a99dff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+@media (max-width: 640px) {
+  .quick-action-menu {
+    right: 0;
+    left: auto;
+    width: 290px;
+  }
+  .monitoring-tabs {
+    width: 100%;
+  }
+}
+
+
+/*------------------------------------------------------------
+   Audit Page Scoped Styles
+   Improves spacing, alignment, and readability of audit entries
+   Scoped to .audit-timeline to avoid affecting other pages
+------------------------------------------------------------*/
+.audit-timeline {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.audit-timeline .audit-entry {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--bg-subtle, #f9fafb);
+    border-radius: 10px;
+    border: 1px solid var(--line, #e5e7eb);
+}
+.audit-timeline .audit-icon {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    font-size: 16px;
+    line-height: 24px;
+    text-align: center;
+    border-radius: 4px;
+    color: #fff;
+    background: var(--violet, #6754ef);
+}
+.audit-timeline .audit-icon.success {
+    background: var(--green, #1aa778);
+}
+.audit-timeline .audit-copy {
+    flex: 1;
+}
+.audit-timeline .audit-copy b {
+    display: block;
+    margin-bottom: 4px;
+    font-weight: 600;
+    color: var(--violet-dark, #5b49df);
+}
+.audit-timeline .audit-copy p {
+    margin: 0 0 4px;
+    color: var(--muted, #888ba5);
+    font-size: 13px;
+    line-height: 1.4;
+}
+.audit-timeline .audit-copy small {
+    display: block;
+    color: var(--muted, #888ba5);
+    font-size: 11px;
+}
+/* Dark mode adjustments */
+:root[data-theme="dark"] .audit-timeline .audit-entry {
+    background: #21232e;
+    border-color: #2c2e3a;
+}
+:root[data-theme="dark"] .audit-timeline .audit-copy b {
+    color: #a99dff;
+}
+
+/*------------------------------------------------------------
+   FairShare Modal Dialog  — .fs-modal-*
+   Shared style for: Buat Kelas, Bentuk Kelompok, Tambah Tugas
+------------------------------------------------------------*/
+
+/* CRITICAL: prevent CSS display:flex from overriding the HTML [hidden] attribute */
+.fs-modal-overlay[hidden] {
+    display: none !important;
+}
+
+.fs-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(10,10,32,.52);
+    backdrop-filter: blur(4px);
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    animation: fsModalIn .18s ease;
+}
+@keyframes fsModalIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+.fs-modal {
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 24px 60px rgba(20,15,60,.18);
+    width: 100%;
+    max-width: 540px;
+    /* Use height instead of max-height so flex children can fill it */
+    max-height: 90vh;
+    height: auto;
+    display: flex;
+    flex-direction: column;
+    animation: fsModalSlide .2s ease;
+    /* overflow hidden clips the border-radius */
+    overflow: hidden;
+    /* min-height 0 is key for flex scroll chain */
+    min-height: 0;
+}
+.fs-modal-lg {
+    max-width: 720px;
+}
+@keyframes fsModalSlide {
+    from { transform: translateY(14px); opacity: 0; }
+    to   { transform: none; opacity: 1; }
+}
+/* When form wraps body+footer, it must also be flex so scroll chain works */
+.fs-modal > form {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+.fs-modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 24px 28px 16px;
+    border-bottom: 1px solid #eeeef6;
+    flex-shrink: 0;
+}
+.fs-modal-title {
+    font: 700 18px Manrope, sans-serif;
+    letter-spacing: -.04em;
+    color: #1c1d2e;
+    margin: 0 0 4px;
+}
+.fs-modal-sub {
+    font-size: 12px;
+    color: #8a8ea6;
+    margin: 0;
+    line-height: 1.5;
+}
+.fs-modal-close {
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid #e5e5f0;
+    border-radius: 8px;
+    background: transparent;
+    color: #6b6f8a;
+    font-size: 14px;
+    cursor: pointer;
+    transition: .15s;
+    margin-top: 2px;
+}
+.fs-modal-close:hover {
+    background: #f5f2ff;
+    border-color: #d9d3ff;
+    color: #5141ce;
+}
+.fs-modal-body {
+    padding: 20px 28px;
+    /* This is what makes the body scrollable */
+    overflow-y: auto;
+    /* flex: 1 makes it fill remaining height between header and footer */
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.fs-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 16px 28px;
+    border-top: 1px solid #eeeef6;
+    flex-shrink: 0;
+    background: #fff;
+}
+/* Field helpers */
+.fs-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+}
+.fs-field-row {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+.fs-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #3a3c56;
+    letter-spacing: -.01em;
+}
+.fs-input {
+    width: 100%;
+    padding: 10px 13px;
+    border: 1px solid #ddddf0;
+    border-radius: 9px;
+    font: 13px "DM Sans", sans-serif;
+    color: #24243d;
+    background: #fff;
+    transition: border-color .15s, box-shadow .15s;
+    box-sizing: border-box;
+}
+.fs-input:focus {
+    outline: none;
+    border-color: #7c6bff;
+    box-shadow: 0 0 0 3px rgba(124,107,255,.12);
+}
+.fs-textarea {
+    resize: vertical;
+    min-height: 90px;
+}
+.fs-hint {
+    font-size: 11px;
+    color: #9094ae;
+    line-height: 1.4;
+}
+/* Dark mode */
+:root[data-theme="dark"] .fs-modal {
+    background: #1e2030;
+    box-shadow: 0 24px 60px rgba(0,0,0,.45);
+}
+:root[data-theme="dark"] .fs-modal-header,
+:root[data-theme="dark"] .fs-modal-footer {
+    border-color: #2c2e3e;
+}
+:root[data-theme="dark"] .fs-modal-footer {
+    background: #1e2030;
+}
+:root[data-theme="dark"] .fs-modal > form {
+    background: #1e2030;
+}
+:root[data-theme="dark"] .fs-modal-title { color: #e8eaf6; }
+:root[data-theme="dark"] .fs-modal-sub   { color: #767a9a; }
+:root[data-theme="dark"] .fs-modal-close {
+    border-color: #333548;
+    color: #9096b8;
+    background: transparent;
+}
+:root[data-theme="dark"] .fs-modal-close:hover { background: #2a2c3f; }
+:root[data-theme="dark"] .fs-label { color: #c4c8e8; }
+:root[data-theme="dark"] .fs-input {
+    background: #252737;
+    border-color: #333548;
+    color: #e0e3f4;
+}
+:root[data-theme="dark"] .fs-input:focus { border-color: #9b8cff; box-shadow: 0 0 0 3px rgba(155,140,255,.14); }
+:root[data-theme="dark"] .fs-hint { color: #676b8a; }

@@ -396,6 +396,17 @@ if ($error) {
 
 <script>
 document.addEventListener("DOMContentLoaded", function() {
+    // Auto-open modal from query param or hash
+    var urlParams = new URLSearchParams(window.location.search);
+    var modalParam = urlParams.get('modal') || (window.location.hash ? window.location.hash.replace('#', '') : '');
+    if (modalParam === 'create') {
+        var createModal = document.getElementById('createClassModal');
+        if (createModal) createModal.hidden = false;
+    } else if (modalParam === 'join') {
+        var joinModal = document.getElementById('joinClassModal');
+        if (joinModal) joinModal.hidden = false;
+    }
+
     document.querySelectorAll("[data-modal-open]").forEach(function(btn) {
         btn.addEventListener("click", function() {
             var modalId = btn.getAttribute("data-modal-open");
@@ -422,6 +433,14 @@ document.addEventListener("DOMContentLoaded", function() {
                 overlay.hidden = true;
             }
         });
+    });
+
+    document.addEventListener("keydown", function(e) {
+        if (e.key === "Escape") {
+            document.querySelectorAll(".modal-overlay").forEach(function(overlay) {
+                overlay.hidden = true;
+            });
+        }
     });
 });
 </script>

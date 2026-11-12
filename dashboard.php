@@ -118,9 +118,132 @@ $chartYLabels = '<span>' . $upperBound . '</span>'
 
 layout_start('Dashboard', 'dashboard');
 
-$headingAction = $teacher
-    ? '<a class="btn primary" href="classes.php">Kelas Saya ↗</a> <a class="btn secondary" href="classroom.php">Monitor Kelas ↗</a>'
-    : button('＋ Buat tugas', 'tasks.php#new-task', 'primary');
+$myClasses = visible_classes($user);
+$myClassCount = count($myClasses);
+
+$quickActionHtml = '<div class="quick-action-wrap" data-quick-action-root>'
+    . '<button class="btn primary quick-action-trigger" type="button" data-quick-action-toggle aria-haspopup="menu" aria-expanded="false" aria-controls="quickActionMenu" id="quickActionBtn">'
+    . '<span>＋ Buat</span> <span class="action-caret" aria-hidden="true">▾</span>'
+    . '</button>'
+    . '<div class="quick-action-menu" id="quickActionMenu" data-quick-action-menu role="menu" aria-label="Menu Aksi Cepat" hidden>';
+
+if ($teacher) {
+    // 1. Buat Kelas (Dosen)
+    $quickActionHtml .= '<a class="quick-action-item" role="menuitem" href="classes.php?modal=create">'
+        . '<div class="quick-action-icon violet">'
+        . '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>'
+        . '</div>'
+        . '<div class="quick-action-text">'
+        . '<strong>Buat Kelas</strong>'
+        . '<span>Buat kelas baru dan bagikan kode undangan</span>'
+        . '</div>'
+        . '</a>';
+
+    // 2. Buat Kelompok (Dosen)
+    if ($myClassCount === 0) {
+        $quickActionHtml .= '<a class="quick-action-item" role="menuitem" href="classes.php?modal=create" title="Buat kelas terlebih dahulu">'
+            . '<div class="quick-action-icon blue">'
+            . '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+            . '</div>'
+            . '<div class="quick-action-text">'
+            . '<strong>Buat Kelompok</strong>'
+            . '<span>Buat kelas terlebih dahulu untuk kelompok</span>'
+            . '</div>'
+            . '</a>';
+    } elseif ($myClassCount === 1) {
+        $classId = (string) $myClasses[0]['id'];
+        $quickActionHtml .= '<a class="quick-action-item" role="menuitem" href="class_detail.php?id=' . urlencode($classId) . '&modal=create_team">'
+            . '<div class="quick-action-icon blue">'
+            . '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+            . '</div>'
+            . '<div class="quick-action-text">'
+            . '<strong>Buat Kelompok</strong>'
+            . '<span>Bentuk kelompok di ' . e($myClasses[0]['name']) . '</span>'
+            . '</div>'
+            . '</a>';
+    } else {
+        $quickActionHtml .= '<button type="button" class="quick-action-item" role="menuitem" data-modal-open="selectClassForTeamModal">'
+            . '<div class="quick-action-icon blue">'
+            . '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+            . '</div>'
+            . '<div class="quick-action-text">'
+            . '<strong>Buat Kelompok</strong>'
+            . '<span>Pilih kelas untuk membuat kelompok baru</span>'
+            . '</div>'
+            . '</button>';
+    }
+
+    // 3. Buat Tugas (Dosen)
+    $quickActionHtml .= '<a class="quick-action-item" role="menuitem" href="tasks.php#new-task">'
+        . '<div class="quick-action-icon orange">'
+        . '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>'
+        . '</div>'
+        . '<div class="quick-action-text">'
+        . '<strong>Buat Tugas</strong>'
+        . '<span>Buat tugas kelompok dengan Smart Assignment</span>'
+        . '</div>'
+        . '</a>';
+} else {
+    // 1. Gabung Kelas (Mahasiswa)
+    $quickActionHtml .= '<a class="quick-action-item" role="menuitem" href="classes.php?modal=join">'
+        . '<div class="quick-action-icon violet">'
+        . '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>'
+        . '</div>'
+        . '<div class="quick-action-text">'
+        . '<strong>Gabung Kelas</strong>'
+        . '<span>Masukkan kode undangan dari dosen pengampu</span>'
+        . '</div>'
+        . '</a>';
+
+    // 2. Buat Kelompok (Mahasiswa)
+    if ($myClassCount === 0) {
+        $quickActionHtml .= '<a class="quick-action-item" role="menuitem" href="classes.php?modal=join" title="Gabung ke kelas terlebih dahulu">'
+            . '<div class="quick-action-icon blue">'
+            . '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+            . '</div>'
+            . '<div class="quick-action-text">'
+            . '<strong>Buat Kelompok</strong>'
+            . '<span>Gabung ke kelas terlebih dahulu</span>'
+            . '</div>'
+            . '</a>';
+    } elseif ($myClassCount === 1) {
+        $classId = (string) $myClasses[0]['id'];
+        $quickActionHtml .= '<a class="quick-action-item" role="menuitem" href="teams.php?class_id=' . urlencode($classId) . '#create-group">'
+            . '<div class="quick-action-icon blue">'
+            . '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+            . '</div>'
+            . '<div class="quick-action-text">'
+            . '<strong>Buat Kelompok</strong>'
+            . '<span>Bentuk kelompok di ' . e($myClasses[0]['name']) . '</span>'
+            . '</div>'
+            . '</a>';
+    } else {
+        $quickActionHtml .= '<a class="quick-action-item" role="menuitem" href="teams.php#create-group">'
+            . '<div class="quick-action-icon blue">'
+            . '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+            . '</div>'
+            . '<div class="quick-action-text">'
+            . '<strong>Buat Kelompok</strong>'
+            . '<span>Pilih kelas dan bentuk kelompok baru</span>'
+            . '</div>'
+            . '</a>';
+    }
+
+    // 3. Gabung Kelompok (Mahasiswa)
+    $quickActionHtml .= '<a class="quick-action-item" role="menuitem" href="teams.php#create-group">'
+        . '<div class="quick-action-icon green">'
+        . '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>'
+        . '</div>'
+        . '<div class="quick-action-text">'
+        . '<strong>Gabung Kelompok</strong>'
+        . '<span>Masuk ke kelompok dengan kode undangan</span>'
+        . '</div>'
+        . '</a>';
+}
+
+$quickActionHtml .= '</div></div>';
+
+$headingAction = $quickActionHtml;
 
 page_heading(
     $teacher ? 'DOSEN / OVERVIEW' : 'WORKSPACE OVERVIEW',
@@ -162,4 +285,38 @@ if (!$recent) {
     echo '</div>';
 }
 echo '</section></div>';
+
+if ($teacher && $myClassCount > 1) {
+    echo '<div class="modal-overlay" id="selectClassForTeamModal" hidden>
+        <div class="modal-box">
+            <div class="modal-head">
+                <div>
+                    <h3>Pilih Kelas untuk Kelompok Baru</h3>
+                    <small>Pilih salah satu kelas yang kamu ampu untuk membuat kelompok di dalamnya.</small>
+                </div>
+                <button class="modal-close" type="button" data-modal-close="selectClassForTeamModal">✕</button>
+            </div>
+            <div class="modal-body" style="padding:16px 20px;">
+                <p class="muted" style="margin-top:0;">Klik pada kelas tujuan pembentukan kelompok:</p>
+                <div style="display:flex; flex-direction:column; gap:8px;">';
+    foreach ($myClasses as $cl) {
+        echo '<a href="class_detail.php?id=' . urlencode((string) $cl['id']) . '&modal=create_team" 
+                   class="panel" 
+                   style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; margin:0; text-decoration:none; color:inherit; border:1px solid #ebebf4; border-radius:10px; transition:all 0.2s;">
+                <div>
+                    <strong style="color:var(--color-primary, #6754ef); display:block;">' . e($cl['name']) . '</strong>
+                    <small class="muted">' . e($cl['semester'] ?? 'Semester') . ' · ' . e($cl['academic_year'] ?? '') . ' · ' . (int) ($cl['team_count'] ?? 0) . ' kelompok saat ini</small>
+                </div>
+                <span class="btn secondary small">Pilih Kelas →</span>
+            </a>';
+    }
+    echo '      </div>
+            </div>
+            <div class="modal-foot">
+                <button class="btn secondary" type="button" data-modal-close="selectClassForTeamModal">Batal</button>
+            </div>
+        </div>
+    </div>';
+}
+
 layout_end();

@@ -1341,7 +1341,14 @@ layout_start($class['name'] . ' · Kelas', 'classes');
             });
         });
 
-        // Check hash URL
+        // Check modal param and hash URL
+        var urlParams = new URLSearchParams(window.location.search);
+        var modalParam = urlParams.get('modal');
+        if (modalParam === 'create_team' || window.location.hash === '#create-team') {
+            var ctm = document.getElementById('createTeamModal');
+            if (ctm) ctm.hidden = false;
+        }
+
         if (window.location.hash) {
             var hash = window.location.hash.replace('#', '');
             if (hash === 'teams') {

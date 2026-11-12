@@ -127,6 +127,10 @@ page_heading(
     'Audit kontribusi individu dalam kelompok berbasis telemetri aktivitas dan progres tugas.',
     '<a class="btn secondary" href="' . e($exportUrl) . '">↓ Unduh Laporan CSV</a>'
 );
+
+if ($teacher) {
+    echo monitoring_tabs('reports');
+}
 ?>
 
 <div class="filter-panel" style="margin-bottom: 24px; padding: 14px 20px; background: #fff; border-radius: 12px; border: 1px solid #ebebf4; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">

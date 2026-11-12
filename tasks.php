@@ -354,7 +354,7 @@ page_heading(
     $teacher ? 'DOSEN / PEMANTAUAN WBS' : 'WORKSPACE / WORK BREAKDOWN STRUCTURE',
     $teacher ? 'Pemantauan Tugas WBS' : 'WBS & Tugas Kelompok',
     $teacher ? 'Pantau pembagian kerja, status, dan target minggu tugas kelompok di kelasmu.' : 'Pecah pekerjaan menjadi tugas yang terukur, dengan bobot kesulitan, penanggung jawab, dan target minggu.',
-    '<a class="btn primary" href="#new-task">＋ Tambah Tugas</a>'
+    '<button class="btn primary" id="openTaskModal" type="button" onclick="openNewTaskModal()">＋ Tambah Tugas</button>'
 );
 
 if ($error) {
@@ -470,196 +470,241 @@ $inProgCount = count(array_filter($allUserTasks, fn($t) => ($t['status_db'] ?? '
                     </div>
                 </article>
             <?php endforeach; ?>
-            <a class="kanban-add" href="#new-task">＋ Tambah tugas</a>
+            <a class="kanban-add" href="#" onclick="openNewTaskModal(); return false;">＋ Tambah tugas</a>
         </section>
     <?php endforeach; ?>
 </div>
 
-<section class="panel task-create-panel" id="new-task">
-    <div class="panel-heading">
-        <div>
-            <div class="panel-title"><?= $teacher ? 'Tambah Tugas Kelas / Kelompok' : 'Tambah Tugas WBS Kelompok' ?></div>
-            <div class="panel-sub">Tugas dicatat dalam tabel tasks Supabase untuk pemantauan progres kolaborasi.</div>
+<?php if (!$groups): ?>
+<!-- Modal Tambah Tugas (no groups state) -->
+<div id="taskModal" class="fs-modal-overlay" hidden aria-modal="true" role="dialog" aria-labelledby="taskModalTitle">
+    <div class="fs-modal">
+        <div class="fs-modal-header">
+            <div>
+                <h2 class="fs-modal-title" id="taskModalTitle"><?= $teacher ? 'Tambah Tugas WBS' : 'Tambah Tugas WBS' ?></h2>
+                <p class="fs-modal-sub"><?= $teacher ? 'Tugas akan dibagikan ke kelompok penerima.' : 'Tugas akan dicatat pada WBS kelompokmu.' ?></p>
+            </div>
+            <button type="button" class="fs-modal-close" onclick="closeNewTaskModal()" aria-label="Tutup">✕</button>
+        </div>
+        <div class="fs-modal-body">
+            <div class="flash error">
+                <?= $teacher
+                    ? 'Belum ada kelompok yang terbentuk pada kelasmu. Buat kelompok terlebih dahulu di menu Kelas Saya.'
+                    : 'Buat atau gabung ke kelompok terlebih dahulu di menu Tim &amp; Kelompok.' ?>
+            </div>
+        </div>
+        <div class="fs-modal-footer">
+            <button type="button" class="btn secondary" onclick="closeNewTaskModal()">Tutup</button>
         </div>
     </div>
-
-    <?php if (!$groups): ?>
-        <div class="flash error">
-            <?= $teacher
-                ? 'Belum ada kelompok yang terbentuk pada kelasmu. Buat kelompok terlebih dahulu di menu Kelas Saya.'
-                : 'Buat atau gabung ke kelompok terlebih dahulu di menu Kelompok Saya.'
-            ?>
+</div>
+<?php else: ?>
+<!-- Modal Tambah Tugas -->
+<div id="taskModal" class="fs-modal-overlay" hidden aria-modal="true" role="dialog" aria-labelledby="taskModalTitle">
+    <div class="fs-modal fs-modal-lg">
+        <div class="fs-modal-header">
+            <div>
+                <h2 class="fs-modal-title" id="taskModalTitle"><?= $teacher ? 'Tambah Tugas WBS' : 'Tambah Tugas WBS Kelompok' ?></h2>
+                <p class="fs-modal-sub"><?= $teacher ? 'Tugas akan dibagikan ke kelompok atau seluruh kelas yang kamu kelola.' : 'Tugas dicatat dalam tabel tasks Supabase untuk pemantauan progres kolaborasi.' ?></p>
+            </div>
+            <button type="button" class="fs-modal-close" onclick="closeNewTaskModal()" aria-label="Tutup">✕</button>
         </div>
-    <?php else: ?>
-        <form method="post" class="form-grid">
+        <form method="post" id="newTaskForm">
             <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">
             <input type="hidden" name="action" value="create">
+            <div class="fs-modal-body">
 
-            <div class="field-wide">
-                <label>Judul Tugas WBS <span class="text-danger">*</span></label>
-                <input name="title" maxlength="200" required placeholder="Contoh: Implementasi API dan Database Schema">
-            </div>
-
-            <div class="field-wide">
-                <label>Deskripsi / Instruksi Pengerjaan</label>
-                <textarea 
-                    name="description" 
-                    rows="3" 
-                    style="width: 100%; max-width: 100%; box-sizing: border-box; resize: vertical; min-height: 80px;" 
-                    placeholder="Detail kriteria tugas, batasan teknis, atau dokumen rujukan..."></textarea>
-            </div>
-
-            <?php if ($teacher): ?>
-                <div>
-                    <label>Lingkup Penerima</label>
-                    <select name="scope" id="taskScopeSelect" onchange="toggleScopeInputs()">
-                        <option value="single">Kelompok Tertentu</option>
-                        <option value="all_in_class">Semua Kelompok di Kelas</option>
-                    </select>
+                <!-- Judul Tugas -->
+                <div class="fs-field">
+                    <label class="fs-label">Judul Tugas WBS <span class="text-danger">*</span></label>
+                    <input class="fs-input" name="title" maxlength="200" required placeholder="Contoh: Implementasi API dan Database Schema">
                 </div>
 
-                <div id="singleGroupField">
-                    <label>Pilih Kelompok Penerima</label>
-                    <select name="group_id">
+                <!-- Deskripsi -->
+                <div class="fs-field">
+                    <label class="fs-label">Deskripsi / Instruksi Pengerjaan</label>
+                    <textarea class="fs-input fs-textarea" name="description" rows="3" placeholder="Detail kriteria tugas, batasan teknis, atau dokumen rujukan..."></textarea>
+                </div>
+
+                <?php if ($teacher): ?>
+                <!-- Lingkup Penerima & Kelompok/Kelas — baris 1 -->
+                <div class="fs-field-row">
+                    <div class="fs-field">
+                        <label class="fs-label">Lingkup Penerima</label>
+                        <select class="fs-input" name="scope" id="taskScopeSelect" onchange="toggleScopeInputs()">
+                            <option value="single">Kelompok Tertentu</option>
+                            <option value="all_in_class">Semua Kelompok di Kelas</option>
+                        </select>
+                    </div>
+                    <div class="fs-field" id="singleGroupField">
+                        <label class="fs-label">Pilih Kelompok Penerima</label>
+                        <select class="fs-input" name="group_id">
+                            <?php foreach ($groups as $g): ?>
+                                <option value="<?= e($g['id']) ?>"><?= e($g['name']) ?> (<?= e($g['course'] ?? 'Kelas') ?>)</option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="fs-field" id="classField" hidden>
+                        <label class="fs-label">Pilih Kelas</label>
+                        <select class="fs-input" name="class_id">
+                            <?php foreach ($classes as $cl): ?>
+                                <option value="<?= e($cl['id']) ?>"><?= e($cl['name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                </div>
+                <?php else: ?>
+                <!-- Mahasiswa: pilih kelompok sendiri -->
+                <div class="fs-field">
+                    <label class="fs-label">Kelompok Kamu <span class="text-danger">*</span></label>
+                    <select class="fs-input" name="group_id" required>
                         <?php foreach ($groups as $g): ?>
                             <option value="<?= e($g['id']) ?>"><?= e($g['name']) ?> (<?= e($g['course'] ?? 'Kelas') ?>)</option>
                         <?php endforeach; ?>
                     </select>
                 </div>
+                <?php endif; ?>
 
-                <div id="classField" hidden>
-                    <label>Pilih Kelas</label>
-                    <select name="class_id">
-                        <?php foreach ($classes as $cl): ?>
-                            <option value="<?= e($cl['id']) ?>"><?= e($cl['name']) ?></option>
-                        <?php endforeach; ?>
-                    </select>
+                <!-- Bobot & Status — baris 2 -->
+                <div class="fs-field-row">
+                    <div class="fs-field">
+                        <label class="fs-label">Bobot Kesulitan (1–5)</label>
+                        <select class="fs-input" name="weight">
+                            <option value="1">1 – Sangat Ringan</option>
+                            <option value="2">2 – Ringan</option>
+                            <option value="3" selected>3 – Sedang</option>
+                            <option value="4">4 – Berat</option>
+                            <option value="5">5 – Sangat Kompleks</option>
+                        </select>
+                    </div>
+                    <div class="fs-field">
+                        <label class="fs-label">Status Awal</label>
+                        <select class="fs-input" name="status">
+                            <option>Belum dikerjakan</option>
+                            <option>Dikerjakan</option>
+                            <option>Review</option>
+                            <option>Selesai</option>
+                        </select>
+                    </div>
                 </div>
-            <?php else: ?>
-                <div>
-                    <label>Kelompok Kamu <span class="text-danger">*</span></label>
-                    <select name="group_id" required>
-                        <?php foreach ($groups as $g): ?>
-                            <option value="<?= e($g['id']) ?>"><?= e($g['name']) ?> (<?= e($g['course'] ?? 'Kelas') ?>)</option>
-                        <?php endforeach; ?>
-                    </select>
+
+                <!-- Jenis Tugas & Target Minggu — baris 3 -->
+                <div class="fs-field-row">
+                    <div class="fs-field">
+                        <label class="fs-label">Jenis Tugas &amp; Resource</label>
+                        <select class="fs-input" name="task_type" id="taskTypeSelect" onchange="toggleTaskResourceInputs()">
+                            <option value="manual">Tugas Biasa (Manual / Non-Resource)</option>
+                            <option value="gdocs">Dokumen Google Docs</option>
+                            <option value="github">Kode di GitHub</option>
+                        </select>
+                    </div>
+                    <div class="fs-field">
+                        <label class="fs-label">Target Minggu Ke-</label>
+                        <input class="fs-input" type="number" name="target_week" min="1" max="52" value="1" required>
+                    </div>
                 </div>
-            <?php endif; ?>
 
-            <div>
-                <label>Bobot Kesulitan (1–5)</label>
-                <select name="weight">
-                    <option value="1">1 - Sangat Ringan</option>
-                    <option value="2">2 - Ringan</option>
-                    <option value="3" selected>3 - Sedang</option>
-                    <option value="4">4 - Berat</option>
-                    <option value="5">5 - Sangat Kompleks</option>
-                </select>
-            </div>
+                <!-- Resource URL (conditional) -->
+                <div class="fs-field" id="resourceFieldBox" hidden>
+                    <label class="fs-label" id="resourceFieldLabel">Link Dokumen Google Docs <span class="text-danger">*</span></label>
+                    <input class="fs-input" type="url" name="resource_url" id="resourceFieldInput" maxlength="2000" placeholder="https://docs.google.com/document/d/.../edit">
+                    <small class="fs-hint" id="resourceFieldHelp">Dokumen Google Docs ini akan dilacak aktivitasnya melalui Google Drive Activity API untuk audit kontribusi tim.</small>
+                </div>
 
-            <div>
-                <label>Status Awal</label>
-                <select name="status">
-                    <option>Belum dikerjakan</option>
-                    <option>Dikerjakan</option>
-                    <option>Review</option>
-                    <option>Selesai</option>
-                </select>
-            </div>
-
-            <div>
-                <label>Jenis Tugas & Resource</label>
-                <select name="task_type" id="taskTypeSelect" onchange="toggleTaskResourceInputs()">
-                    <option value="manual">Tugas Biasa (Manual / Non-Resource)</option>
-                    <option value="gdocs">Dokumen Google Docs</option>
-                    <option value="github">Kode di GitHub</option>
-                </select>
-            </div>
-
-            <div class="field-wide" id="resourceFieldBox" hidden>
-                <label id="resourceFieldLabel">Link Dokumen Google Docs <span class="text-danger">*</span></label>
-                <input type="url" name="resource_url" id="resourceFieldInput" maxlength="2000" placeholder="https://docs.google.com/document/d/.../edit">
-                <small class="muted" id="resourceFieldHelp" style="display:block; margin-top:4px;">
-                    Dokumen Google Docs ini akan dilacak aktivitasnya melalui Google Drive Activity API untuk audit kontribusi tim.
-                </small>
-            </div>
-
-            <div>
-                <label>Target Minggu Ke-</label>
-                <input type="number" name="target_week" min="1" max="52" value="1" required>
-            </div>
-
-            <div class="field-actions">
-                <button class="btn primary">Simpan Tugas WBS →</button>
+            </div><!-- /.fs-modal-body -->
+            <div class="fs-modal-footer">
+                <button type="button" class="btn secondary" onclick="closeNewTaskModal()">Batal</button>
+                <button type="submit" class="btn primary">＋ Simpan Tugas WBS</button>
             </div>
         </form>
-    <?php endif; ?>
-</section>
+    </div>
+</div>
+<?php endif; ?>
 
 <script>
+/* ── Task Modal ── */
+function openNewTaskModal() {
+    var modal = document.getElementById('taskModal');
+    if (!modal) return;
+    modal.hidden = false;
+    document.body.style.overflow = 'hidden';
+    var firstInput = modal.querySelector('input[name="title"]');
+    if (firstInput) setTimeout(function(){ firstInput.focus(); }, 80);
+}
+function closeNewTaskModal() {
+    var modal = document.getElementById('taskModal');
+    if (!modal) return;
+    modal.hidden = true;
+    document.body.style.overflow = '';
+}
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeNewTaskModal();
+});
+document.getElementById('taskModal')?.addEventListener('click', function(e) {
+    if (e.target === this) closeNewTaskModal();
+});
+
+/* ── Scope toggle (dosen) ── */
 function toggleScopeInputs() {
-    var scope = document.getElementById("taskScopeSelect")?.value;
-    var singleField = document.getElementById("singleGroupField");
-    var classField = document.getElementById("classField");
-    if (scope === "all_in_class") {
-        if (singleField) singleField.hidden = true;
-        if (classField) classField.hidden = false;
+    var scope = document.getElementById('taskScopeSelect')?.value;
+    var singleField = document.getElementById('singleGroupField');
+    var classField  = document.getElementById('classField');
+    if (!singleField || !classField) return;
+    if (scope === 'all_in_class') {
+        singleField.hidden = true;
+        classField.hidden  = false;
     } else {
-        if (singleField) singleField.hidden = false;
-        if (classField) classField.hidden = true;
+        singleField.hidden = false;
+        classField.hidden  = true;
     }
 }
 
+/* ── Task type toggle ── */
 function toggleTaskResourceInputs() {
-    var type = document.getElementById("taskTypeSelect")?.value;
-    var box = document.getElementById("resourceFieldBox");
-    var label = document.getElementById("resourceFieldLabel");
-    var input = document.getElementById("resourceFieldInput");
-    var help = document.getElementById("resourceFieldHelp");
+    var type   = document.getElementById('taskTypeSelect')?.value;
+    var box    = document.getElementById('resourceFieldBox');
+    var label  = document.getElementById('resourceFieldLabel');
+    var input  = document.getElementById('resourceFieldInput');
+    var help   = document.getElementById('resourceFieldHelp');
     if (!box || !label || !input || !help) return;
-    if (type === "gdocs") {
+    if (type === 'gdocs') {
         box.hidden = false;
         label.innerHTML = 'Link Dokumen Google Docs <span class="text-danger">*</span>';
-        input.placeholder = "https://docs.google.com/document/d/.../edit";
-        help.textContent = "Dokumen Google Docs ini akan dilacak aktivitasnya melalui Google Drive Activity API untuk audit kontribusi tim.";
+        input.placeholder = 'https://docs.google.com/document/d/.../edit';
+        help.textContent = 'Dokumen Google Docs ini akan dilacak aktivitasnya melalui Google Drive Activity API untuk audit kontribusi tim.';
         input.required = true;
-    } else if (type === "github") {
+    } else if (type === 'github') {
         box.hidden = false;
         label.innerHTML = 'Link Repository GitHub <span class="text-danger">*</span>';
-        input.placeholder = "https://github.com/owner/repository";
-        help.textContent = "Masukkan tautan repository GitHub kelompok (contoh: https://github.com/owner/repository).";
+        input.placeholder = 'https://github.com/owner/repository';
+        help.textContent  = 'Masukkan tautan repository GitHub kelompok (contoh: https://github.com/owner/repository).';
         input.required = true;
     } else {
         box.hidden = true;
         input.required = false;
-        input.value = "";
+        input.value = '';
     }
 }
 
+/* ── Task card dropdown ── */
 function toggleTaskMenu(taskId, event) {
-    if (event) {
-        event.stopPropagation();
-    }
+    if (event) event.stopPropagation();
     var menu = document.getElementById('taskMenu-' + taskId);
     if (!menu) return;
-
     var isHidden = menu.hidden;
-    // Tutup dropdown lain yang sedang terbuka
-    document.querySelectorAll('.task-dropdown-menu').forEach(function(m) {
-        m.hidden = true;
-    });
-
+    document.querySelectorAll('.task-dropdown-menu').forEach(function(m){ m.hidden = true; });
     menu.hidden = !isHidden;
 }
-
-// Tutup menu jika klik di luar
 document.addEventListener('click', function(e) {
     if (!e.target.closest('.task-dropdown-wrap')) {
-        document.querySelectorAll('.task-dropdown-menu').forEach(function(m) {
-            m.hidden = true;
-        });
+        document.querySelectorAll('.task-dropdown-menu').forEach(function(m){ m.hidden = true; });
     }
 });
+
+<?php if ($error): ?>
+/* Re-open modal on server validation error */
+openNewTaskModal();
+<?php endif; ?>
 </script>
 
 <?php layout_end(); ?>

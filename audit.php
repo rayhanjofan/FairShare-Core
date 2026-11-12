@@ -20,8 +20,12 @@ if (($_GET['export'] ?? '') === 'csv') {
     fclose($o);
     exit;
 }
-layout_start('Audit & Telemetry', 'audit');
-page_heading('TRANSPARENCY / SYSTEM AUDIT', 'Audit & Telemetry', 'Tinjau log aktivitas antarmuka dan telemetri yang tersimpan di Supabase.', button('↓ Ekspor log', 'audit.php?export=csv', 'secondary'));
+$pageTitle = $teacher ? 'Audit & Telemetry' : 'Audit & Kontribusi';
+layout_start($pageTitle, 'audit');
+page_heading($teacher ? 'DOSEN / MONITORING & AUDIT' : 'ANALISIS / AUDIT & KONTRIBUSI', $pageTitle, 'Tinjau log aktivitas antarmuka dan telemetri yang tersimpan di Supabase.', button('↓ Ekspor log', 'audit.php?export=csv', 'secondary'));
+if ($teacher) {
+    echo monitoring_tabs('audit');
+}
 echo '<div class="stats-grid three-stats"><article class="stat-card"><div class="stat-label">LOG AKTIVITAS UI</div><div class="stat-number">' . count($logs) . '</div><div class="stat-foot">Catatan antarmuka pada perangkat ini</div></article><article class="stat-card"><div class="stat-label">EVENT TELEMETRI</div><div class="stat-number">' . count($telemetry) . '</div><div class="stat-foot">Data bersama dari telemetry_logs</div></article><article class="stat-card"><div class="stat-label">SUMBER API LANGSUNG</div><div class="stat-number">0<small> aktif</small></div><div class="stat-foot">GitHub/Google API belum dikonfigurasi</div></article></div>';
 echo '<div class="content-grid audit-grid"><section class="panel"><div class="panel-heading"><div><div class="panel-title">Log aktivitas aplikasi</div><div class="panel-sub">Catatan UI lokal, bukan audit log terpusat</div></div><span class="status-badge waiting">Lokal</span></div><div class="audit-timeline">';
 if (!$logs)

@@ -61,6 +61,8 @@ page_heading(
     'Pantau progres tugas WBS, aktivitas telemetri, dan kontribusi anggota dari kelas pengajaranmu.',
     '<a class="btn primary" href="classes.php">Kelola Kelas Saya ↗</a>'
 );
+
+echo monitoring_tabs('classroom');
 ?>
 
 <div class="filter-panel" style="margin-bottom: 24px; padding: 14px 20px; background: #fff; border-radius: 12px; border: 1px solid #ebebf4; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">

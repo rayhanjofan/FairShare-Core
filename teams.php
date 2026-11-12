@@ -417,10 +417,13 @@ if ($error) {
                 <input type="hidden" name="action" value="create">
 
                 <label>Pilih Kelas Perkuliahan <span class="text-danger">*</span></label>
+                <?php $preselectedClassId = trim((string) ($_GET['class_id'] ?? '')); ?>
                 <select name="class_id" required>
                     <option value="">-- Pilih Kelas --</option>
                     <?php foreach ($myClasses as $mc): ?>
-                        <option value="<?= e($mc['id']) ?>"><?= e($mc['name']) ?></option>
+                        <option value="<?= e($mc['id']) ?>" <?= ($preselectedClassId === (string) $mc['id'] || count($myClasses) === 1) ? 'selected' : '' ?>>
+                            <?= e($mc['name']) ?>
+                        </option>
                     <?php endforeach; ?>
                 </select>
 
@@ -443,7 +446,7 @@ if ($error) {
 
             <div class="form-separator"></div>
 
-            <div class="panel-title">Gabung Kelompok</div>
+            <div class="panel-title" id="join-group">Gabung Kelompok</div>
             <p class="panel-sub">Masukkan kode undangan kelompok dari teman sekelasmu.</p>
             <form method="post">
                 <input type="hidden" name="csrf" value="<?= e(csrf_token()) ?>">

@@ -309,8 +309,21 @@ function toast(message) {
     }
   };
 
+  const closeQuickAction = () => {
+    const qaMenu = document.querySelector("[data-quick-action-menu]");
+    if (qaMenu && !qaMenu.hidden) {
+      qaMenu.hidden = true;
+      const qaBtn = document.querySelector("[data-quick-action-toggle]");
+      qaBtn?.setAttribute("aria-expanded", "false");
+      qaBtn?.classList.remove("active");
+    }
+  };
+
   const setOpen = (open) => {
-    if (open) closeNotif();
+    if (open) {
+      closeNotif();
+      closeQuickAction();
+    }
     panel.hidden = !open;
     trigger.setAttribute("aria-expanded", open ? "true" : "false");
   };
@@ -326,6 +339,7 @@ function toast(message) {
       if (!panel.hidden) {
         setOpen(false);
       }
+      closeQuickAction();
     });
   }
 
@@ -340,5 +354,87 @@ function toast(message) {
       setOpen(false);
       trigger.focus();
     }
+  });
+})();
+
+// ==========================================
+// FAIRSHARE QUICK ACTION POPUP (+ Buat)
+// ==========================================
+(() => {
+  const root = document.querySelector("[data-quick-action-root]");
+  if (!root) return;
+  const trigger = root.querySelector("[data-quick-action-toggle]");
+  const menu = root.querySelector("[data-quick-action-menu]");
+  if (!trigger || !menu) return;
+
+  const profileRoot = document.querySelector("[data-profile-menu]");
+  const profilePanel = profileRoot?.querySelector("[data-profile-panel]");
+  const notifRoot = document.querySelector("[data-notification-root]");
+  const notifPanel = notifRoot?.querySelector("[data-notification-panel]");
+
+  const closeOtherPopups = () => {
+    if (profilePanel && !profilePanel.hidden) {
+      profilePanel.hidden = true;
+      profileRoot?.querySelector("[data-profile-toggle]")?.setAttribute("aria-expanded", "false");
+    }
+    if (notifPanel && !notifPanel.hidden) {
+      notifPanel.hidden = true;
+      notifRoot?.querySelector("[data-notification-toggle]")?.setAttribute("aria-expanded", "false");
+    }
+  };
+
+  const setOpen = (open) => {
+    if (open) closeOtherPopups();
+    menu.hidden = !open;
+    trigger.setAttribute("aria-expanded", open ? "true" : "false");
+    trigger.classList.toggle("active", open);
+  };
+
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setOpen(menu.hidden);
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!root.contains(e.target) && !menu.hidden) {
+      setOpen(false);
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !menu.hidden) {
+      setOpen(false);
+      trigger.focus();
+    }
+  });
+
+  // Global modal open/close helpers
+  document.querySelectorAll("[data-modal-open]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const modalId = btn.getAttribute("data-modal-open");
+      const target = document.getElementById(modalId);
+      if (target) {
+        setOpen(false);
+        target.hidden = false;
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-modal-close]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const modalId = btn.getAttribute("data-modal-close");
+      const target = document.getElementById(modalId);
+      if (target) {
+        target.hidden = true;
+      }
+    });
+  });
+
+  document.querySelectorAll(".modal-overlay").forEach((overlay) => {
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        overlay.hidden = true;
+      }
+    });
   });
 })();

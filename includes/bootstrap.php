@@ -872,26 +872,57 @@ function layout_start(string $title, string $active = 'dashboard'): void
     $flash = take_flash();
     $teacher = is_teacher($user);
 
-    $nav = [
-        'dashboard' => ['▦', 'Dashboard', 'dashboard.php'],
-        'contributions' => ['◈', 'Kontribusi Saya', 'contributions.php'],
-        'teams' => ['♧', 'Tim & Kelompok', 'teams.php'],
-        'classroom' => ['▤', 'Monitor Kelas', 'classroom.php'],
-        'tasks' => ['☷', 'WBS & Tugas', 'tasks.php'],
-        'audit' => ['⌁', 'Audit & Telemetry', 'audit.php'],
-        'reports' => ['▤', 'Laporan Audit', 'reports.php'],
-        'settings' => ['⚙', 'Pengaturan', 'settings.php'],
-    ];
-
-    echo '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . e($title) . ' · FairShare</title><script>(function(){try{var t=localStorage.getItem("fairshare-theme");if(t)document.documentElement.dataset.theme=t;}catch(e){}})();</script><link rel="stylesheet" href="assets/style.css?v=6"><script defer src="assets/app.js?v=6"></script></head><body>';
-    echo '<aside class="sidebar" id="sidebar"><a class="brand" href="dashboard.php"><span class="brand-mark brand-logo"><img src="assets/fairshare-logo.svg" alt=""></span><span>FairShare<small>COLLABORATION INTELLIGENCE</small></span></a><div class="nav-caption">WORKSPACE</div><nav class="nav">';
-    foreach ($nav as $key => $item) {
-        if ($key === 'classroom' && !$teacher) {
-            continue;
-        }
-        echo '<a class="' . ($active === $key ? 'active' : '') . '" href="' . $item[2] . '"><span class="nav-icon">' . $item[0] . '</span><span>' . $item[1] . '</span>' . ($active === $key ? '<i></i>' : '') . '</a>';
+    if ($teacher) {
+        $workspaceNav = [
+            'dashboard' => ['▦', 'Dashboard', 'dashboard.php'],
+            'classes'   => ['▤', 'Kelas Saya', 'classes.php'],
+            'teams'     => ['♧', 'Tim & Kelompok', 'teams.php'],
+            'tasks'     => ['☷', 'WBS & Tugas', 'tasks.php'],
+        ];
+        $secondaryCaption = 'MONITORING';
+        $secondaryNav = [
+            'monitoring' => ['⌁', 'Monitoring & Audit', 'classroom.php'],
+        ];
+    } else {
+        $workspaceNav = [
+            'dashboard'     => ['▦', 'Dashboard', 'dashboard.php'],
+            'classes'       => ['▤', 'Kelas Saya', 'classes.php'],
+            'teams'         => ['♧', 'Tim & Kelompok', 'teams.php'],
+            'tasks'         => ['☷', 'WBS & Tugas', 'tasks.php'],
+            'contributions' => ['◈', 'Kontribusi Saya', 'contributions.php'],
+        ];
+        $secondaryCaption = 'ANALISIS';
+        $secondaryNav = [
+            'audit' => ['⌁', 'Audit & Kontribusi', 'audit.php'],
+        ];
     }
-    echo '</nav><div class="sidebar-bottom"><div class="workspace-card"><span class="workspace-icon">✦</span><div><b>FairShare Academic</b><small>' . ($teacher ? 'Portal Dosen' : 'Portal Mahasiswa') . '</small></div><span class="online-dot"></span></div></div></aside>';
+
+    $isItemActive = static function (string $key) use ($active, $teacher): bool {
+        if ($active === $key) {
+            return true;
+        }
+        if ($teacher && $key === 'monitoring' && in_array($active, ['classroom', 'audit', 'reports', 'monitoring'], true)) {
+            return true;
+        }
+        return false;
+    };
+
+    echo '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' . e($title) . ' · FairShare</title><script>(function(){try{var t=localStorage.getItem("fairshare-theme");if(t)document.documentElement.dataset.theme=t;}catch(e){}})();</script><link rel="stylesheet" href="assets/style.css?v=7"><script defer src="assets/app.js?v=7"></script></head><body>';
+    echo '<aside class="sidebar" id="sidebar"><a class="brand" href="dashboard.php"><span class="brand-mark brand-logo"><img src="assets/fairshare-logo.svg" alt=""></span><span>FairShare<small>COLLABORATION INTELLIGENCE</small></span></a><div class="nav-caption">WORKSPACE</div><nav class="nav">';
+    foreach ($workspaceNav as $key => $item) {
+        $activeClass = $isItemActive($key) ? 'active' : '';
+        echo '<a class="' . $activeClass . '" href="' . $item[2] . '"><span class="nav-icon">' . $item[0] . '</span><span>' . $item[1] . '</span>' . ($activeClass !== '' ? '<i></i>' : '') . '</a>';
+    }
+    echo '</nav>';
+    if (!empty($secondaryNav)) {
+        echo '<div class="nav-caption" style="margin-top:16px;">' . e($secondaryCaption) . '</div><nav class="nav">';
+        foreach ($secondaryNav as $key => $item) {
+            $activeClass = $isItemActive($key) ? 'active' : '';
+            echo '<a class="' . $activeClass . '" href="' . $item[2] . '"><span class="nav-icon">' . $item[0] . '</span><span>' . $item[1] . '</span>' . ($activeClass !== '' ? '<i></i>' : '') . '</a>';
+        }
+        echo '</nav>';
+    }
+    echo '<div class="sidebar-bottom"><div class="workspace-card"><span class="workspace-icon">✦</span><div><b>FairShare Academic</b><small>' . ($teacher ? 'Portal Dosen' : 'Portal Mahasiswa') . '</small></div><span class="online-dot"></span></div></div></aside>';
     echo '<div class="app-shell"><header class="topbar"><div class="topbar-left"><button class="mobile-menu" data-menu-toggle aria-label="Buka menu">☰</button><div><div class="breadcrumb">FAIRSHARE <span>/</span> ' . e(strtoupper($title)) . '</div><div class="topbar-sub">' . ($teacher ? 'Portal Dosen Pengampu & Monitoring Kolaborasi' : 'Workspace kontribusi dan transparansi kolaborasi mahasiswa') . '</div></div></div><div class="topbar-actions"><span class="system-status"><i></i> Sistem aktif</span>
     <div class="notification-wrap" data-notification-root data-csrf="' . e(csrf_token()) . '">
     <button class="icon-btn notification-trigger" type="button" data-notification-toggle aria-label="Buka notifikasi" aria-expanded="false" aria-controls="notificationPanel">
@@ -983,6 +1014,15 @@ function layout_start(string $title, string $active = 'dashboard'): void
                     </span>
                     <span>Pengaturan</span>
                 </a>
+                <a class="profile-item" role="menuitem" href="integrations.php">
+                    <span class="profile-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                        </svg>
+                    </span>
+                    <span>Koneksi</span>
+                </a>
                 <button type="button" class="profile-item profile-theme-toggle" data-theme-toggle role="menuitem" aria-label="Ganti tema">
                     <span class="profile-icon theme-icon" aria-hidden="true">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -1033,4 +1073,23 @@ function format_date(string $date): string
 {
     $ts = strtotime($date);
     return $ts ? date('d M Y', $ts) : $date;
+}
+
+function monitoring_tabs(string $activeTab = 'classroom'): string
+{
+    $tabs = [
+        'classroom' => ['▤', 'Monitoring Kelas', 'classroom.php'],
+        'audit'     => ['⌁', 'Audit & Telemetry', 'audit.php'],
+        'reports'   => ['📄', 'Laporan Audit', 'reports.php'],
+    ];
+
+    $html = '<div class="monitoring-tabs" role="tablist">';
+    foreach ($tabs as $key => $tab) {
+        $isActive = ($key === $activeTab);
+        $html .= '<a href="' . $tab[2] . '" class="monitoring-tab' . ($isActive ? ' active' : '') . '" role="tab" aria-selected="' . ($isActive ? 'true' : 'false') . '">';
+        $html .= '<span class="tab-icon">' . $tab[0] . '</span> <span>' . e($tab[1]) . '</span>';
+        $html .= '</a>';
+    }
+    $html .= '</div>';
+    return $html;
 }
