@@ -1,5 +1,53 @@
 [
     {
+        "id": "b84ff0eda3",
+        "title": "Tugas kelompok dibuat",
+        "detail": "Laporan Milestone",
+        "type": "success",
+        "time": "2026-11-23 10:05:39",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
+        "id": "28917d8ae8",
+        "title": "Tugas dihapus",
+        "detail": "Laporan Tengah Semester",
+        "type": "warning",
+        "time": "2026-11-23 10:03:54",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
+        "id": "a00e817c72",
+        "title": "Tugas dihapus",
+        "detail": "Laporan Tengah Semester",
+        "type": "warning",
+        "time": "2026-11-23 10:03:47",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
+        "id": "951bb9969e",
+        "title": "Tugas dihapus",
+        "detail": "proposal pbl",
+        "type": "warning",
+        "time": "2026-11-23 10:03:40",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
+        "id": "226b6e1928",
+        "title": "Tugas dihapus",
+        "detail": "Laporan Implementasi Pbo",
+        "type": "warning",
+        "time": "2026-11-23 10:03:21",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
+        "id": "db9c5b0864",
+        "title": "Login berhasil",
+        "detail": "Pengguna masuk ke workspace",
+        "type": "success",
+        "time": "2026-11-23 10:01:26",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
         "id": "8a1ccbec75",
         "title": "Logout",
         "detail": "Pengguna keluar dari workspace",
