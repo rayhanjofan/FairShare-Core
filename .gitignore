@@ -1,11 +1,8 @@
-# Secrets and local config
-/data/.env
-/data/installed.lock
+# Environment files - never commit secrets
+.env
+.env.*
+!.env.example
 
-# Mutable local JSON storage
-/data/users.json
-/data/groups.json
-/data/tasks.json
-/data/telemetry.json
-/data/activity.json
-/data/preferences-*.json
+/config/.env
+/config/.env.*
+!/config/.env.example

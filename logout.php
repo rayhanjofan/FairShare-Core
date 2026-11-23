@@ -1,4 +1,6 @@
 <?php
-require_once __DIR__.'/includes/bootstrap.php';
-if(current_user())log_activity('Logout','Pengguna keluar dari workspace');
-$_SESSION=[];session_destroy();header('Location: login.php');exit;
+if (!defined('FS_ROOT')) {
+    define('FS_ROOT', __DIR__);
+}
+require FS_ROOT . '/pages/auth/logout.php';
+

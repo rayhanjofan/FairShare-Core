@@ -10,8 +10,20 @@ require_once __DIR__ . '/contribution_engine.php';
 require_once __DIR__ . '/analytics.php';
 
 define('APP_NAME', 'FairShare');
-define('BASE_PATH', dirname(__DIR__));
+if (!defined('FS_ROOT')) {
+    define('FS_ROOT', dirname(__DIR__));
+}
+if (!defined('BASE_PATH')) {
+    define('BASE_PATH', FS_ROOT);
+}
+define('CONFIG_PATH', FS_ROOT . '/config');
+define('STORAGE_PATH', FS_ROOT . '/storage');
+define('LOGS_PATH', STORAGE_PATH . '/logs');
 define('DATA_PATH', BASE_PATH . '/data');
+
+if (!is_dir(LOGS_PATH)) {
+    mkdir(LOGS_PATH, 0775, true);
+}
 if (!is_dir(DATA_PATH)) {
     mkdir(DATA_PATH, 0775, true);
 }
@@ -44,30 +56,53 @@ function redirect(string $path): never
 
 function read_data(string $file, array $fallback = []): array
 {
-    $path = DATA_PATH . '/' . basename($file);
-    if (!is_file($path)) {
-        return $fallback;
+    $base = basename($file);
+    $candidates = [
+        LOGS_PATH . '/' . $base,
+        STORAGE_PATH . '/' . $base,
+        DATA_PATH . '/' . $base,
+    ];
+    foreach ($candidates as $path) {
+        if (is_file($path)) {
+            $raw = file_get_contents($path);
+            $data = json_decode($raw ?: '', true);
+            return is_array($data) ? $data : $fallback;
+        }
     }
-    $raw = file_get_contents($path);
-    $data = json_decode($raw ?: '', true);
-    return is_array($data) ? $data : $fallback;
+    return $fallback;
 }
 
 function write_data(string $file, array $data): bool
 {
-    $path = DATA_PATH . '/' . basename($file);
+    $base = basename($file);
+    $path = LOGS_PATH . '/' . $base;
     $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($json === false) {
         return false;
     }
-    return file_put_contents($path, $json . PHP_EOL, LOCK_EX) !== false;
+    $res = file_put_contents($path, $json . PHP_EOL, LOCK_EX) !== false;
+    if (is_dir(DATA_PATH)) {
+        @file_put_contents(DATA_PATH . '/' . $base, $json . PHP_EOL, LOCK_EX);
+    }
+    return $res;
 }
 
-/** Read a single key from data/.env without exposing the full configuration. */
+/** Read a single key from config/.env, root .env, or data/.env without exposing the full configuration. */
 function app_env(string $key, string $default = ''): string
 {
-    $envFile = DATA_PATH . '/.env';
-    if (!is_file($envFile)) {
+    $candidates = [
+        CONFIG_PATH . '/.env',
+        FS_ROOT . '/.env',
+        DATA_PATH . '/.env',
+    ];
+    $envFile = null;
+    foreach ($candidates as $cand) {
+        if (is_file($cand)) {
+            $envFile = $cand;
+            break;
+        }
+    }
+    if (!$envFile) {
         return $default;
     }
     foreach (file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
@@ -85,7 +120,11 @@ function app_env(string $key, string $default = ''): string
 
 function fairshare_pdo(): ?PDO
 {
-    require_once BASE_PATH . '/data/db.php';
+    if (is_file(CONFIG_PATH . '/db.php')) {
+        require_once CONFIG_PATH . '/db.php';
+    } else {
+        require_once BASE_PATH . '/data/db.php';
+    }
     return fairshare_db();
 }
 
