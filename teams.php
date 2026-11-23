@@ -399,9 +399,14 @@ if ($error) {
                                 Buka Kelas →
                             </a>
                         <?php endif; ?>
-                        <a class="btn primary small" href="tasks.php?group=<?= urlencode($g['id']) ?>">
-                            Kelola Tugas WBS →
-                        </a>
+                        <div style="display:flex; gap:8px;">
+                            <a class="btn secondary small" href="team_detail.php?id=<?= urlencode($g['id']) ?>">
+                                Analitik Tim ↗
+                            </a>
+                            <a class="btn primary small" href="tasks.php?group=<?= urlencode($g['id']) ?>">
+                                Kelola Tugas WBS →
+                            </a>
+                        </div>
                     </div>
                 </article>
             <?php endforeach; ?>

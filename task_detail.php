@@ -118,26 +118,54 @@ $activities = sa_task_activities($taskId, 100);
 $integration = fs_google_integration((string) $user['id']);
 $taskWei = fs_calculate_task_wei($taskId);
 
-$validEventsCount = 0;
-$pendingEventsCount = 0;
-$rejectedEventsCount = 0;
-$sumRawDelta = 0.0;
-$sumFilteredDelta = 0.0;
+// Ambil ringkasan aktivitas tugas resmi dari view v_task_activity_summary
+$taskSummary = fs_get_task_activity_summary(null, $taskId);
+if ($taskSummary) {
+    $totalEvents = (int) ($taskSummary['total_events'] ?? 0);
+    $gdocsEvents = (int) ($taskSummary['gdocs_events'] ?? 0);
+    $githubEvents = (int) ($taskSummary['github_events'] ?? 0);
+    $validEventsCount = (int) ($taskSummary['valid_events'] ?? 0);
+    $pendingEventsCount = (int) ($taskSummary['pending_events'] ?? 0);
+    $rejectedEventsCount = (int) ($taskSummary['rejected_events'] ?? 0);
+    $sumRawDelta = (float) ($taskSummary['total_raw_delta'] ?? 0.0);
+    $sumFilteredDelta = (float) ($taskSummary['total_filtered_delta'] ?? 0.0);
+    $identifiedMembers = (int) ($taskSummary['identified_members'] ?? 0);
+    $lastActivityAt = $taskSummary['last_activity_at'] ?? null;
+    $dueAt = $taskSummary['due_at'] ?? ($task['due_at'] ?? null);
+} else {
+    $validEventsCount = 0;
+    $pendingEventsCount = 0;
+    $rejectedEventsCount = 0;
+    $sumRawDelta = 0.0;
+    $sumFilteredDelta = 0.0;
+    $totalEvents = count($activities);
+    $gdocsEvents = 0;
+    $githubEvents = 0;
+    $identifiedMembers = 0;
+    $lastActivityAt = null;
+    $dueAt = $task['due_at'] ?? null;
 
-foreach ($activities as $actItem) {
-    $m = $actItem['metadata'] ?? [];
-    $vStat = strtolower(trim((string) ($m['validation_status'] ?? '')));
-    $rawVal = (float) ($actItem['raw_delta'] ?? 1.0);
-    $filtVal = (float) ($actItem['filtered_delta'] ?? 0.0);
-    $sumRawDelta += $rawVal;
-    $sumFilteredDelta += $filtVal;
+    foreach ($activities as $actItem) {
+        $m = $actItem['metadata'] ?? [];
+        $vStat = strtolower(trim((string) ($m['validation_status'] ?? '')));
+        $rawVal = (float) ($actItem['raw_delta'] ?? 1.0);
+        $filtVal = (float) ($actItem['filtered_delta'] ?? 0.0);
+        $sumRawDelta += $rawVal;
+        $sumFilteredDelta += $filtVal;
 
-    if ($vStat === 'valid' || $vStat === 'terverifikasi') {
-        $validEventsCount++;
-    } elseif ($vStat === 'pending' || $vStat === 'menunggu kalibrasi bobot') {
-        $pendingEventsCount++;
-    } else {
-        $rejectedEventsCount++;
+        if (($actItem['source'] ?? '') === 'gdocs') {
+            $gdocsEvents++;
+        } elseif (($actItem['source'] ?? '') === 'github') {
+            $githubEvents++;
+        }
+
+        if ($vStat === 'valid' || $vStat === 'terverifikasi') {
+            $validEventsCount++;
+        } elseif ($vStat === 'pending' || $vStat === 'menunggu kalibrasi bobot') {
+            $pendingEventsCount++;
+        } else {
+            $rejectedEventsCount++;
+        }
     }
 }
 
@@ -249,6 +277,21 @@ if ($error !== '') {
             <div class="task-meta-item">
                 <div class="task-meta-label">Target Minggu</div>
                 <div class="task-meta-val">Minggu Ke-<?= (int) $task['target_week'] ?></div>
+            </div>
+
+            <div class="task-meta-item">
+                <div class="task-meta-label">Tenggat Waktu</div>
+                <div class="task-meta-val"><?= !empty($dueAt) ? e($formatUtcToLocal((string)$dueAt, 'd M Y H:i')) . ' WIB' : 'Tidak ditentukan' ?></div>
+            </div>
+
+            <div class="task-meta-item">
+                <div class="task-meta-label">Anggota Teridentifikasi</div>
+                <div class="task-meta-val"><?= (int) $identifiedMembers ?> mahasiswa</div>
+            </div>
+
+            <div class="task-meta-item">
+                <div class="task-meta-label">Aktivitas Terakhir</div>
+                <div class="task-meta-val"><?= !empty($lastActivityAt) ? e($formatUtcToLocal((string)$lastActivityAt, 'd M Y H:i')) . ' WIB' : 'Belum ada aktivitas' ?></div>
             </div>
 
             <div class="task-meta-item">
@@ -398,8 +441,12 @@ if ($error !== '') {
             <span class="counter"><?= count($activities) ?> aktivitas</span>
         </div>
 
-        <!-- STATISTIK RINGKAS TUGAS -->
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:20px; padding:12px 16px; background:#f8fafc; border-radius:10px; border:1px solid #e2e8f0;">
+        <!-- STATISTIK RINGKAS TUGAS DARI v_task_activity_summary -->
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:20px; padding:12px 16px; background:#f8fafc; border-radius:10px; border:1px solid #e2e8f0;">
+            <div>
+                <span class="muted" style="font-size:11px; font-weight:700;">TOTAL AKTIVITAS:</span>
+                <div style="font-size:18px; font-weight:800; color:#4338ca;"><?= (int) $totalEvents ?> <small style="font-size:11px; color:#64748b;">(Docs: <?= (int)$gdocsEvents ?>, Git: <?= (int)$githubEvents ?>)</small></div>
+            </div>
             <div>
                 <span class="muted" style="font-size:11px; font-weight:700;">TOTAL FILTERED DELTA:</span>
                 <div style="font-size:18px; font-weight:800; color:#10b981;"><?= number_format($sumFilteredDelta, 2) ?></div>

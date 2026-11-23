@@ -772,7 +772,7 @@ function fs_google_sync_task(string $taskId): array
         }
     }
 
-    if ($checkedAccounts === 0 && $skippedAccounts > 0) {
+    if ($checkedAccounts === 0) {
         $message = 'Belum ada akun Google anggota kelompok yang terhubung dan dapat disinkronkan. Minta setiap anggota menghubungkan akun Google mereka.';
         $update = $pdo->prepare("UPDATE public.tasks SET last_synced_at = CURRENT_TIMESTAMP, sync_status = 'error', sync_error = :sync_error, updated_at = CURRENT_TIMESTAMP WHERE id = CAST(:task_id AS UUID)");
         $update->execute(['sync_error' => $message, 'task_id' => $taskId]);

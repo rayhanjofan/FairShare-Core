@@ -7,6 +7,7 @@ if (session_status() !== PHP_SESSION_ACTIVE && php_sapi_name() !== 'cli') {
 
 require_once __DIR__ . '/telemetry_validator.php';
 require_once __DIR__ . '/contribution_engine.php';
+require_once __DIR__ . '/analytics.php';
 
 define('APP_NAME', 'FairShare');
 define('BASE_PATH', dirname(__DIR__));

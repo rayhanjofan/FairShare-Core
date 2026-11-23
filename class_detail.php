@@ -1074,9 +1074,14 @@ layout_start($class['name'] . ' · Kelas', 'classes');
                                         </div>
                                     </td>
                                     <td>
-                                        <a class="btn secondary small" href="tasks.php?group=<?= urlencode($tm['id']) ?>">
-                                            Lihat Tugas →
-                                        </a>
+                                        <div style="display:flex; gap:6px;">
+                                            <a class="btn primary small" href="team_detail.php?id=<?= urlencode($tm['id']) ?>">
+                                                Analitik ↗
+                                            </a>
+                                            <a class="btn secondary small" href="tasks.php?group=<?= urlencode($tm['id']) ?>">
+                                                Tugas →
+                                            </a>
+                                        </div>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>

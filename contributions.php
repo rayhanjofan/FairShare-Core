@@ -15,22 +15,40 @@ $manualCount = 0;
 $totalRawDelta = 0.0;
 $totalFilteredDelta = 0.0;
 
-foreach ($items as $item) {
-    $meta = $item['metadata'] ?? [];
-    $entryMode = (string) ($meta['entry_mode'] ?? '');
-    $valStatus = strtolower(trim((string) ($meta['validation_status'] ?? '')));
+// Ambil metrik teragregasi dari view resmi v_team_contribution_summary jika terdaftar di kelompok
+$primaryGroup = $groups[0] ?? null;
+$dbContrib = null;
+if ($primaryGroup) {
+    $primaryGid = (string) $primaryGroup['id'];
+    $dbContrib = fs_get_user_team_contribution($primaryGid, $userId);
+}
 
-    if ($entryMode === 'manual_test') {
-        $manualCount++;
-    } else {
-        $totalRawDelta += (float) ($item['raw_delta'] ?? 1.0);
-        if ($valStatus === 'valid' || $valStatus === 'terverifikasi') {
-            $validCount++;
-            $totalFilteredDelta += (float) ($item['filtered_delta'] ?? 0.0);
-        } elseif ($valStatus === 'pending' || $valStatus === 'menunggu kalibrasi bobot') {
-            $pendingCount++;
+if ($dbContrib) {
+    $validCount = (int) $dbContrib['valid_events'];
+    $pendingCount = (int) $dbContrib['pending_events'];
+    $rejectedCount = (int) $dbContrib['rejected_events'];
+    $manualCount = (int) $dbContrib['manual_test_events'];
+    $totalRawDelta = (float) $dbContrib['total_raw_delta'];
+    $totalFilteredDelta = (float) $dbContrib['total_filtered_delta'];
+} else {
+    // Fallback: hitung dari log telemetri jika belum memiliki record di view
+    foreach ($items as $item) {
+        $meta = $item['metadata'] ?? [];
+        $entryMode = (string) ($meta['entry_mode'] ?? '');
+        $valStatus = strtolower(trim((string) ($meta['validation_status'] ?? '')));
+
+        if ($entryMode === 'manual_test') {
+            $manualCount++;
         } else {
-            $rejectedCount++;
+            $totalRawDelta += (float) ($item['raw_delta'] ?? 1.0);
+            if ($valStatus === 'valid' || $valStatus === 'terverifikasi') {
+                $validCount++;
+                $totalFilteredDelta += (float) ($item['filtered_delta'] ?? 0.0);
+            } elseif ($valStatus === 'pending' || $valStatus === 'menunggu kalibrasi bobot') {
+                $pendingCount++;
+            } else {
+                $rejectedCount++;
+            }
         }
     }
 }

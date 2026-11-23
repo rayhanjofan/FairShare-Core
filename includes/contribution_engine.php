@@ -36,7 +36,121 @@ function fs_calculate_group_wei(string $groupId, ?PDO $pdo = null): array
         return fs_empty_group_wei_result($groupId, 'Kelompok tidak ditemukan.');
     }
 
-    // 2. Ambil seluruh anggota mahasiswa kelompok
+    // Gunakan fungsi PostgreSQL public.fn_group_wei_summary sebagai sumber utama kalkulasi WEI
+    try {
+        $fnStmt = $pdo->prepare("SELECT * FROM public.fn_group_wei_summary(CAST(:group_id AS UUID))");
+        $fnStmt->execute(['group_id' => $groupId]);
+        $weiRows = $fnStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (!empty($weiRows)) {
+            // Ambil v_team_contribution_summary untuk event counts
+            $teamContrib = fs_get_team_contribution_summary($groupId, $pdo);
+            $contribByUser = [];
+            foreach ($teamContrib as $c) {
+                $contribByUser[strtolower((string) $c['user_id'])] = $c;
+            }
+
+            // Ambil v_task_activity_summary
+            $tasksActivity = fs_get_task_activity_summary($groupId, null, $pdo) ?? [];
+            $taskDetails = [];
+            $validTasksCount = 0;
+            $manualTasksCount = 0;
+            $totalEvaluatedWeight = 0;
+
+            foreach ($tasksActivity as $ta) {
+                $tid = (string) $ta['task_id'];
+                $hasValid = (int) $ta['valid_events'] > 0;
+                if ($hasValid) {
+                    $validTasksCount++;
+                    $totalEvaluatedWeight += (int) $ta['weight'];
+                }
+                if ($ta['task_type'] === 'manual') {
+                    $manualTasksCount++;
+                }
+                $taskDetails[$tid] = [
+                    'task_id' => $tid,
+                    'title' => (string) $ta['task_title'],
+                    'task_type' => (string) $ta['task_type'],
+                    'weight' => (int) $ta['weight'],
+                    'status' => (string) $ta['task_status'],
+                    'has_valid_data' => $hasValid,
+                    'total_events' => (int) $ta['total_events'],
+                    'valid_events_count' => (int) $ta['valid_events'],
+                    'pending_events_count' => (int) $ta['pending_events'],
+                    'rejected_events_count' => (int) $ta['rejected_events'],
+                    'total_raw_delta' => (float) $ta['total_raw_delta'],
+                    'total_filtered_delta' => (float) $ta['total_filtered_delta'],
+                ];
+            }
+
+            $totalValidEvents = 0;
+            $totalWeiSum = 0.0;
+            $memberStats = [];
+
+            foreach ($weiRows as $w) {
+                $uid = strtolower((string) $w['user_id']);
+                $c = $contribByUser[$uid] ?? [];
+
+                $validEvents = (int) ($w['valid_event_count'] ?? 0);
+                $totalValidEvents += $validEvents;
+                $weiPct = (float) ($w['wei_percentage'] ?? 0.0);
+                $totalWeiSum += $weiPct;
+
+                $memberStats[$uid] = [
+                    'user_id' => (string) $w['user_id'],
+                    'name' => (string) ($w['student_name'] ?? ''),
+                    'nim' => (string) ($w['nim_nip'] ?? ''),
+                    'email' => (string) ($c['email'] ?? ''),
+                    'role_in_group' => (string) ($w['role_in_group'] ?? 'anggota'),
+                    'raw_delta_total' => (float) ($w['total_valid_raw_delta'] ?? 0.0),
+                    'filtered_delta_total' => (float) ($w['total_filtered_delta'] ?? 0.0),
+                    'valid_events_count' => $validEvents,
+                    'pending_events_count' => (int) ($c['pending_events'] ?? 0),
+                    'rejected_events_count' => (int) ($c['rejected_events'] ?? 0),
+                    'manual_events_count' => (int) ($c['manual_test_events'] ?? 0),
+                    'unattributed_events_count' => 0,
+                    'wei_percent' => $weiPct,
+                    'wei_formatted' => number_format($weiPct, 1) . '%',
+                    'data_status' => (string) ($w['data_status'] ?? 'Tersedia'),
+                    'member_active_task_count' => (int) ($w['member_active_task_count'] ?? 0),
+                    'scored_task_count' => (int) ($w['scored_task_count'] ?? 0),
+                ];
+            }
+
+            $hasSufficientData = ($totalValidEvents > 0);
+            if (!$hasSufficientData) {
+                foreach ($memberStats as &$ms) {
+                    $ms['wei_percent'] = null;
+                    $ms['wei_formatted'] = 'Belum cukup data';
+                    $ms['data_status'] = 'insufficient_data';
+                }
+                unset($ms);
+            }
+
+            $totalTasksCount = count($taskDetails);
+            $pendingOrNoDataTasksCount = max(0, $totalTasksCount - $validTasksCount - $manualTasksCount);
+
+            return [
+                'group_id' => $groupId,
+                'group_name' => (string) ($group['name'] ?? ''),
+                'has_sufficient_data' => $hasSufficientData,
+                'data_status' => $hasSufficientData ? 'sufficient' : 'insufficient_data',
+                'status_label' => $hasSufficientData ? 'Data Cukup' : 'Belum Cukup Data',
+                'total_tasks_count' => $totalTasksCount,
+                'valid_tasks_count' => $validTasksCount,
+                'pending_or_no_data_tasks_count' => $pendingOrNoDataTasksCount,
+                'manual_tasks_count' => $manualTasksCount,
+                'total_evaluated_weight' => $totalEvaluatedWeight,
+                'total_wei_sum' => $hasSufficientData ? round($totalWeiSum, 4) : 0.0,
+                'members' => $memberStats,
+                'tasks' => $taskDetails,
+            ];
+        }
+    } catch (Throwable $e) {
+        error_log('FairShare fn_group_wei_summary exception: ' . $e->getMessage());
+    }
+
+    // 2. Ambil seluruh anggota mahasiswa kelompok (Fallback)
     $memberStmt = $pdo->prepare("
         SELECT
             u.id::text AS user_id,

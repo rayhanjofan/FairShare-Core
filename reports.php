@@ -15,62 +15,76 @@ if ($selectedClassId !== '' && !in_array($selectedClassId, $classIds, true)) {
     $selectedClassId = '';
 }
 
-// Jika belum memilih kelas dan ada kelas yang tersedia, pilih kelas pertama secara default jika ada filter
 $teams = visible_groups($user);
 if ($selectedClassId !== '') {
     $teams = array_values(array_filter($teams, fn($t) => ($t['parent_group_id'] ?? '') === $selectedClassId));
 }
 
-$teamIds = array_column($teams, 'id');
-$allTasks = all_tasks();
-$allTelemetry = all_telemetry(null, $teamIds);
-
-// Buat rekap kontribusi per mahasiswa menggunakan engine WEI FairShare
+// Rekapitulasi kontribusi anggota menggunakan view & function resmi Supabase
 $reportRows = [];
+$totalAllTelemetry = 0;
+
 foreach ($teams as $t) {
-    $tid = $t['id'];
-    $teamTasks = array_values(array_filter($allTasks, fn($tk) => ($tk['group_id'] ?? '') === $tid));
-    $teamDoneTasks = count(array_filter($teamTasks, fn($tk) => ($tk['status_db'] ?? '') === 'done'));
+    $tid = (string) $t['id'];
 
-    // Hitung distribusi kontribusi terbobot (WEI) kelompok
-    $groupWei = fs_calculate_group_wei((string) $tid, $pdo);
+    // 1. Progres tugas tim dari fn_task_progress
+    $prog = fs_get_task_progress($tid, $pdo);
+    $teamTaskDone = $prog ? "{$prog['completed_tasks']} / {$prog['total_tasks']} ({$prog['completion_percentage']}%)" : '0 / 0';
 
-    foreach (($t['members'] ?? []) as $m) {
-        $uid = $m['user_id'];
-        $userTelemetry = array_values(array_filter($allTelemetry, fn($tl) => strtolower((string) ($tl['user_id'] ?? '')) === strtolower((string) $uid) && ($tl['group_id'] ?? '') === $tid));
-        $githubEvents = count(array_filter($userTelemetry, fn($tl) => ($tl['source'] ?? '') === 'github'));
-        $gdocsEvents = count(array_filter($userTelemetry, fn($tl) => ($tl['source'] ?? '') === 'gdocs'));
-        
-        $mWei = $groupWei['members'][$uid] ?? null;
-        $rawDeltaTotal = $mWei ? (float) $mWei['raw_delta_total'] : array_sum(array_column($userTelemetry, 'raw_delta'));
-        $filteredDeltaTotal = $mWei ? (float) $mWei['filtered_delta_total'] : array_sum(array_column($userTelemetry, 'filtered_delta'));
-        
-        $weiVal = $mWei && $mWei['wei_percent'] !== null ? round((float) $mWei['wei_percent'], 1) : null;
-        $weiFormatted = $mWei ? $mWei['wei_formatted'] : 'Belum cukup data';
-        $dataStatus = $groupWei['has_sufficient_data'] ? 'Cukup Data' : 'Belum Cukup Data';
+    // 2. Ringkasan kontribusi tim dari v_team_contribution_summary
+    $contribRows = fs_get_team_contribution_summary($tid, $pdo);
+
+    // 3. WEI resmi dari fn_group_wei_summary
+    $weiRows = fs_get_group_wei_summary($tid, $pdo);
+    $weiByUser = [];
+    foreach ($weiRows as $w) {
+        $weiByUser[strtolower((string) $w['user_id'])] = $w;
+    }
+
+    $teamTotalValid = (int) array_sum(array_column($contribRows, 'valid_events'));
+
+    foreach ($contribRows as $c) {
+        $uid = strtolower((string) $c['user_id']);
+        $w = $weiByUser[$uid] ?? null;
+
+        $validEvents = (int) ($c['valid_events'] ?? 0);
+        $pendingEvents = (int) ($c['pending_events'] ?? 0);
+        $rejectedEvents = (int) ($c['rejected_events'] ?? 0);
+        $totalEvents = (int) ($c['total_events'] ?? 0);
+        $totalAllTelemetry += $totalEvents;
+
+        $rawDelta = (float) ($c['total_raw_delta'] ?? 0.0);
+        $filteredDelta = (float) ($c['total_filtered_delta'] ?? 0.0);
+
+        $weiVal = $w !== null ? (float) $w['wei_percentage'] : 0.0;
+        $dataStatus = $w['data_status'] ?? 'Belum Cukup Data';
+        $statusInfo = fs_determine_wei_status($validEvents, $teamTotalValid, $dataStatus);
 
         $reportRows[] = [
-            'user_id'         => $uid,
-            'name'            => $m['name'],
-            'nim'             => $m['nim_nip'] ?: '—',
-            'email'           => $m['email'],
+            'user_id'         => (string) $c['user_id'],
+            'name'            => (string) $c['student_name'],
+            'nim'             => (string) ($c['nim_nip'] ?: '—'),
+            'email'           => '',
             'team_id'         => $tid,
-            'team_name'       => $t['name'],
-            'class_name'      => $t['parent_class_name'] ?: ($t['course'] ?: 'Kelas'),
-            'role_in_team'    => $m['role_in_group'] === 'ketua' ? 'Project Manager' : 'Anggota',
-            'is_pm'           => $m['role_in_group'] === 'ketua',
-            'github_events'   => $githubEvents,
-            'gdocs_events'    => $gdocsEvents,
-            'total_events'    => count($userTelemetry),
-            'raw_delta'       => round($rawDeltaTotal, 2),
-            'filtered_delta'  => round($filteredDeltaTotal, 2),
-            'total_points'    => round($filteredDeltaTotal, 2),
-            'wei_val'         => $weiVal,
-            'wei_indicator'   => $weiVal ?? 0.0,
-            'wei_formatted'   => $weiFormatted,
-            'data_status'     => $dataStatus,
-            'has_sufficient'  => $groupWei['has_sufficient_data'],
-            'team_task_done'  => "$teamDoneTasks / " . count($teamTasks),
+            'team_name'       => (string) $c['team_name'],
+            'class_name'      => (string) $c['class_name'],
+            'role_in_team'    => ($c['role_in_group'] === 'ketua') ? 'Project Manager' : 'Anggota',
+            'is_pm'           => ($c['role_in_group'] === 'ketua'),
+            'github_events'   => (int) ($c['github_events'] ?? 0),
+            'gdocs_events'    => (int) ($c['gdocs_events'] ?? 0),
+            'total_events'    => $totalEvents,
+            'valid_events'    => $validEvents,
+            'pending_events'  => $pendingEvents,
+            'rejected_events' => $rejectedEvents,
+            'raw_delta'       => $rawDelta,
+            'filtered_delta'  => $filteredDelta,
+            'wei_val'         => $statusInfo['has_valid_data'] ? $weiVal : null,
+            'wei_formatted'   => $statusInfo['has_valid_data'] ? number_format($weiVal, 1) . '%' : '—',
+            'status_label'    => $statusInfo['label'],
+            'status_class'    => $statusInfo['class'],
+            'has_sufficient'  => $statusInfo['has_valid_data'],
+            'team_task_done'  => $teamTaskDone,
+            'last_activity_at'=> $c['last_activity_at'] ?? null,
         ];
     }
 }
@@ -83,35 +97,41 @@ if (($_GET['export'] ?? '') === 'csv') {
     fputcsv($out, [
         'Nama Mahasiswa',
         'NIM',
-        'Email',
         'Kelas',
         'Kelompok',
         'Peran',
-        'Event GitHub',
         'Event Google Docs',
+        'Event GitHub',
         'Total Event',
+        'Event Valid',
+        'Event Pending',
+        'Event Ditolak',
         'Raw Delta',
         'Filtered Delta',
         'Indikator WEI',
         'Status Data',
-        'Progres Tugas Tim'
+        'Progres Tugas Tim',
+        'Waktu Aktivitas Terakhir'
     ]);
     foreach ($reportRows as $r) {
         fputcsv($out, [
             $r['name'],
             $r['nim'],
-            $r['email'],
             $r['class_name'],
             $r['team_name'],
             $r['role_in_team'],
-            $r['github_events'],
             $r['gdocs_events'],
+            $r['github_events'],
             $r['total_events'],
-            $r['raw_delta'],
-            $r['filtered_delta'],
+            $r['valid_events'],
+            $r['pending_events'],
+            $r['rejected_events'],
+            number_format($r['raw_delta'], 2),
+            number_format($r['filtered_delta'], 2),
             $r['wei_formatted'],
-            $r['data_status'],
+            $r['status_label'],
             $r['team_task_done'],
+            !empty($r['last_activity_at']) ? date('Y-m-d H:i:s', strtotime((string)$r['last_activity_at'])) : '—',
         ]);
     }
     fclose($out);
@@ -124,7 +144,7 @@ $exportUrl = 'reports.php?export=csv' . ($selectedClassId ? '&class_id=' . urlen
 page_heading(
     $teacher ? 'DOSEN / AUDIT TRANSPARANSI' : 'WORKSPACE / AUDIT LAPORAN',
     'Laporan Transparansi & Kontribusi',
-    'Audit kontribusi individu dalam kelompok berbasis telemetri aktivitas dan progres tugas.',
+    'Audit kontribusi individu dalam kelompok berbasis telemetri aktivitas dan progres tugas dari database resmi Supabase.',
     '<a class="btn secondary" href="' . e($exportUrl) . '">↓ Unduh Laporan CSV</a>'
 );
 
@@ -160,13 +180,13 @@ if ($teacher) {
     </article>
     <article class="stat-card">
         <div class="stat-label">TOTAL EVENT TELEMETRI</div>
-        <div class="stat-number"><?= count($allTelemetry) ?></div>
-        <div class="stat-foot">GitHub & Google Docs tersimpan</div>
+        <div class="stat-number"><?= $totalAllTelemetry ?></div>
+        <div class="stat-foot">v_team_contribution_summary</div>
     </article>
     <article class="stat-card">
         <div class="stat-label">INTEGRITAS AUDIT</div>
         <div class="stat-number"><small>DATA ASLI</small></div>
-        <div class="stat-foot">Dibaca langsung dari PostgreSQL Supabase</div>
+        <div class="stat-foot">fn_group_wei_summary() Supabase</div>
     </article>
 </div>
 
@@ -192,12 +212,13 @@ if ($teacher) {
                         <th>Mahasiswa & NIM</th>
                         <th>Kelas & Kelompok</th>
                         <th>Peran</th>
-                        <th>Aktivitas Terdata</th>
+                        <th>Event Valid / Total</th>
                         <th>Raw Delta</th>
                         <th>Filtered Delta</th>
                         <th>Indikator WEI</th>
                         <th>Status Data</th>
                         <th>Progres Tim</th>
+                        <th>Aktivitas Terakhir</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -217,8 +238,8 @@ if ($teacher) {
                                 </span>
                             </td>
                             <td>
-                                <small>Docs: <b><?= $r['gdocs_events'] ?></b> | Git: <b><?= $r['github_events'] ?></b></small>
-                                <div style="font-size:10px; color:#64748b; margin-top:2px;"><?= $r['total_events'] ?> total event</div>
+                                <span style="color:#10b981; font-weight:700;">✓ <?= $r['valid_events'] ?></span> / <?= $r['total_events'] ?>
+                                <div style="font-size:10px; color:#64748b; margin-top:2px;">Docs: <?= $r['gdocs_events'] ?> · Git: <?= $r['github_events'] ?></div>
                             </td>
                             <td><?= number_format($r['raw_delta'], 2) ?></td>
                             <td><b><?= number_format($r['filtered_delta'], 2) ?></b></td>
@@ -235,11 +256,16 @@ if ($teacher) {
                                 <?php endif; ?>
                             </td>
                             <td>
-                                <span class="status-badge <?= $r['has_sufficient'] ? 'good' : 'waiting' ?>" style="font-size:10px;">
-                                    <?= e($r['data_status']) ?>
+                                <span class="status-badge <?= e($r['status_class']) ?>" style="font-size:10px;" title="<?= e($r['status_label']) ?>">
+                                    <?= e($r['status_label']) ?>
                                 </span>
                             </td>
-                            <td><small><?= e($r['team_task_done']) ?> tuntas</small></td>
+                            <td><small><?= e($r['team_task_done']) ?></small></td>
+                            <td>
+                                <small class="muted">
+                                    <?= !empty($r['last_activity_at']) ? date('d M Y H:i', strtotime((string)$r['last_activity_at'])) . ' WIB' : '—' ?>
+                                </small>
+                            </td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
