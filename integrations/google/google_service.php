@@ -361,7 +361,15 @@ function fs_google_access_token(string $userId): string
         throw new RuntimeException('Refresh token Google tidak tersedia. Hubungkan ulang akun Google.');
     }
     $config = fs_google_required_config();
-    $refreshToken = fs_decrypt_secret($refresh);
+    try {
+        $refreshToken = fs_decrypt_secret($refresh);
+    } catch (Throwable $e) {
+        throw new RuntimeException(
+            'Refresh token Google tidak dapat dibuka. Periksa apakah APP_ENCRYPTION_KEY masih sama dengan kunci saat token disimpan. Jika kunci benar, hubungkan ulang akun Google.',
+            0,
+            $e
+        );
+    }
 
     try {
         $token = fs_google_http_json('POST', 'https://oauth2.googleapis.com/token', [
@@ -374,10 +382,29 @@ function fs_google_access_token(string $userId): string
             'grant_type' => 'refresh_token',
         ], '', '&', PHP_QUERY_RFC3986));
     } catch (Throwable $e) {
-        if (str_contains($e->getMessage(), 'invalid_grant') || str_contains($e->getMessage(), 'HTTP 400') || str_contains($e->getMessage(), 'HTTP 401')) {
-            throw new RuntimeException('Sesi otorisasi Google telah kedaluwarsa atau akses telah dicabut. Silakan hubungkan ulang akun Google Anda pada menu Integrasi.', 401, $e);
+        $googleDetails = $e instanceof FsGoogleApiException ? $e->getDetails() : [];
+        $googleError = strtolower(trim((string) ($googleDetails['error'] ?? '')));
+        $message = $e->getMessage();
+        $isInvalidGrant = $googleError === 'invalid_grant' || str_contains(strtolower($message), 'invalid_grant');
+
+        if ($isInvalidGrant) {
+            throw new RuntimeException(
+                'Refresh token Google sudah tidak berlaku atau akses telah dicabut (invalid_grant). Hubungkan ulang akun Google melalui menu Integrasi. Jika OAuth consent screen masih berstatus Testing untuk pengguna eksternal, otorisasi dengan scope Drive dapat kedaluwarsa setelah 7 hari; untuk pemakaian berkelanjutan, siapkan aplikasi ke status In production sesuai persyaratan verifikasi Google.',
+                401,
+                $e
+            );
         }
-        throw new RuntimeException('Google gagal memperbarui access token: ' . $e->getMessage(), 0, $e);
+
+        $httpStatus = $e instanceof FsGoogleApiException ? $e->getHttpStatus() : (int) $e->getCode();
+        if (in_array($httpStatus, [400, 401], true)) {
+            throw new RuntimeException(
+                'Google menolak permintaan refresh token (HTTP ' . $httpStatus . '). Periksa konfigurasi OAuth Client ID/Secret dan otorisasi akun, lalu hubungkan ulang jika diperlukan.',
+                $httpStatus,
+                $e
+            );
+        }
+
+        throw new RuntimeException('Google gagal memperbarui access token: ' . $message, 0, $e);
     }
 
     $newAccess = (string) ($token['access_token'] ?? '');
@@ -640,18 +667,26 @@ function fs_google_sync_task(string $taskId): array
     }
 
     $inserted = 0;
+    // checkedAccounts counts members whose API activity query completed successfully.
     $checkedAccounts = 0;
     $skippedAccounts = 0;
+    $connectedAccounts = 0;
+    $missingIntegrationAccounts = 0;
+    $missingScopeAccounts = 0;
     $errors = [];
     foreach ($members as $memberId) {
         $integration = fs_google_integration((string) $memberId);
         if (!$integration) {
             $skippedAccounts++;
+            $missingIntegrationAccounts++;
             continue;
         }
+        $connectedAccounts++;
+        $memberEmail = trim((string) ($integration['provider_email'] ?? 'anggota'));
         if (!fs_google_has_activity_scope($integration['scopes'] ?? '')) {
             $skippedAccounts++;
-            $errors[] = 'Akun Google ' . ($integration['provider_email'] ?? 'anggota') . ' belum memiliki izin Google Drive Activity.';
+            $missingScopeAccounts++;
+            $errors[] = 'Akun Google ' . $memberEmail . ' belum memiliki izin Google Drive Activity.';
             continue;
         }
         try {
@@ -731,6 +766,7 @@ function fs_google_sync_task(string $taskId): array
                         'attribution_method' => 'oauth_is_current_user',
                         'validation_status' => $validation['validation_status'],
                         'validation_reason' => $validation['validation_reason'],
+                        'reason_description' => $validation['reason_description'] ?? null,
                         'validation_version' => $validation['validation_version'],
                         'validated_at' => $validation['validated_at'],
                         'description' => 'Aktivitas ' . $actionType . ' (' . ($validation['is_valid'] ? 'valid' : 'tidak lolos validasi') . ') teramati melalui Google Drive Activity API.',
@@ -767,21 +803,37 @@ function fs_google_sync_task(string $taskId): array
             $checkedAccounts++;
         } catch (Throwable $e) {
             $skippedAccounts++;
-            $errors[] = 'Satu akun Google gagal disinkronkan: ' . mb_substr($e->getMessage(), 0, 180);
-            error_log('FairShare Google sync member ' . $memberId . ': ' . $e->getMessage());
+            $safeDetail = mb_substr(trim($e->getMessage()), 0, 220);
+            $errors[] = 'Akun Google ' . $memberEmail . ' gagal disinkronkan: ' . $safeDetail;
+            // Never log token values; the exception message is expected to contain only API diagnostics.
+            error_log('FairShare Google sync member ' . $memberId . ': ' . $safeDetail);
         }
     }
 
     if ($checkedAccounts === 0) {
-        $message = 'Belum ada akun Google anggota kelompok yang terhubung dan dapat disinkronkan. Minta setiap anggota menghubungkan akun Google mereka.';
+        $failureDetails = $errors;
+        if ($missingIntegrationAccounts > 0) {
+            $failureDetails[] = $missingIntegrationAccounts . ' anggota belum menghubungkan akun Google.';
+        }
+        if ($missingScopeAccounts > 0 && $errors === []) {
+            $failureDetails[] = $missingScopeAccounts . ' akun belum memiliki izin Google Drive Activity.';
+        }
+        if ($failureDetails === []) {
+            $failureDetails[] = 'Tidak ditemukan akun Google anggota yang dapat diproses.';
+        }
+        $message = 'Tidak ada akun Google yang berhasil disinkronkan. ' . implode(' ', array_slice($failureDetails, 0, 5));
+        // Keep sync_state/cursors intact when every member fails; a retry must resume from the previous cursor.
         $update = $pdo->prepare("UPDATE public.tasks SET last_synced_at = CURRENT_TIMESTAMP, sync_status = 'error', sync_error = :sync_error, updated_at = CURRENT_TIMESTAMP WHERE id = CAST(:task_id AS UUID)");
-        $update->execute(['sync_error' => $message, 'task_id' => $taskId]);
+        $update->execute(['sync_error' => mb_substr($message, 0, 1000), 'task_id' => $taskId]);
         throw new RuntimeException($message);
     }
 
     $status = ($errors || $skippedAccounts > 0) ? 'partial' : 'synced';
-    $syncError = $errors ? implode(' | ', array_slice($errors, 0, 3))
-        : ($skippedAccounts > 0 ? $skippedAccounts . ' akun anggota belum menghubungkan Google.' : null);
+    $syncIssues = $errors;
+    if ($missingIntegrationAccounts > 0) {
+        $syncIssues[] = $missingIntegrationAccounts . ' anggota belum menghubungkan akun Google.';
+    }
+    $syncError = $syncIssues ? implode(' | ', array_slice($syncIssues, 0, 5)) : null;
     $update = $pdo->prepare("UPDATE public.tasks SET sync_state = CAST(:sync_state AS JSONB), last_synced_at = CURRENT_TIMESTAMP, sync_status = :sync_status, sync_error = :sync_error, updated_at = CURRENT_TIMESTAMP WHERE id = CAST(:task_id AS UUID)");
     $update->execute([
         'sync_state' => json_encode($state, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
@@ -792,7 +844,10 @@ function fs_google_sync_task(string $taskId): array
     return [
         'inserted' => $inserted,
         'checked_accounts' => $checkedAccounts,
+        'connected_accounts' => $connectedAccounts,
         'skipped_accounts' => $skippedAccounts,
+        'missing_integration_accounts' => $missingIntegrationAccounts,
+        'missing_scope_accounts' => $missingScopeAccounts,
         'errors' => $errors,
         'status' => $status,
     ];

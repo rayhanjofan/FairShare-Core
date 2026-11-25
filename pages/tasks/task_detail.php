@@ -527,8 +527,23 @@ if ($error !== '') {
                             $description = (string) ($meta['description'] ?? $meta['commit_message'] ?? $meta['document_title'] ?? '');
                             $valStatus = strtolower(trim((string) ($meta['validation_status'] ?? '')));
                             $valReason = $meta['validation_reason'] ?? null;
+                            $reasonDescription = trim((string) ($meta['reason_description'] ?? ''));
                             $isValid = in_array($valStatus, ['valid', 'terverifikasi'], true) && (float) $act['filtered_delta'] > 0;
-                            
+                            $auditReasonText = '';
+                            $auditReasonColor = '#ef4444';
+                            if ($isValid) {
+                                $auditReasonText = $reasonDescription !== ''
+                                    ? $reasonDescription
+                                    : (trim((string) $valReason) !== ''
+                                        ? trim((string) $valReason)
+                                        : 'Aktivitas lolos pemeriksaan struktural FairShare.');
+                                $auditReasonColor = '#059669';
+                            } elseif ($reasonDescription !== '') {
+                                $auditReasonText = $reasonDescription;
+                            } elseif (!empty($valReason)) {
+                                $auditReasonText = fs_validation_reason_text((string) $valReason);
+                            }
+
                             $badgeClass = 'waiting';
                             if ($isValid) {
                                 $badgeClass = 'good';
@@ -556,9 +571,9 @@ if ($error !== '') {
                                     <span class="status-badge <?= $badgeClass ?>" style="font-size:10px;">
                                         <?= e($valStatus !== '' ? ucfirst($valStatus) : 'Tercatat') ?>
                                     </span>
-                                    <?php if (!empty($valReason)): ?>
-                                        <div style="font-size:10px; color:#ef4444; margin-top:2px;">
-                                            <?= e(fs_validation_reason_text($valReason)) ?>
+                                    <?php if ($auditReasonText !== ''): ?>
+                                        <div style="font-size:10px; color:<?= e($auditReasonColor) ?>; margin-top:2px;">
+                                            <?= e($auditReasonText) ?>
                                         </div>
                                     <?php endif; ?>
                                 </td>

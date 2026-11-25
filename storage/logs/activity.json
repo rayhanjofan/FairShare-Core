@@ -1,5 +1,77 @@
 [
     {
+        "id": "d690e74e28",
+        "title": "Google terhubung",
+        "detail": "rayhanjofan321@gmail.com",
+        "type": "success",
+        "time": "2026-11-23 17:21:06",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
+        "id": "18a5af8e71",
+        "title": "Login berhasil",
+        "detail": "Pengguna masuk ke workspace",
+        "type": "success",
+        "time": "2026-11-23 16:42:07",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
+        "id": "651f55c299",
+        "title": "Kelompok kelas dibuat",
+        "detail": "Kelompok Kelompok 1 BerbagiAdil di kelas PBL",
+        "type": "success",
+        "time": "2026-11-23 10:29:27",
+        "user": "Riyan Firdaus Amerta"
+    },
+    {
+        "id": "da916dd860",
+        "title": "Bergabung ke kelas",
+        "detail": "Bergabung ke PBL",
+        "type": "success",
+        "time": "2026-11-23 10:28:18",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
+        "id": "4c0ed08aa1",
+        "title": "Login berhasil",
+        "detail": "Pengguna masuk ke workspace",
+        "type": "success",
+        "time": "2026-11-23 10:27:38",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
+        "id": "9f29dff71c",
+        "title": "Kelas baru dibuat",
+        "detail": "Kelas PBL (PBL-6RGMF4)",
+        "type": "success",
+        "time": "2026-11-23 10:26:56",
+        "user": "Riyan Firdaus Amerta"
+    },
+    {
+        "id": "c550313133",
+        "title": "Login berhasil",
+        "detail": "Pengguna masuk ke workspace",
+        "type": "success",
+        "time": "2026-11-23 10:25:51",
+        "user": "Riyan Firdaus Amerta"
+    },
+    {
+        "id": "54654b9007",
+        "title": "Logout",
+        "detail": "Pengguna keluar dari workspace",
+        "type": "info",
+        "time": "2026-11-23 10:25:33",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
+        "id": "9f899c1642",
+        "title": "Google terhubung",
+        "detail": "rayhanjofan321@gmail.com",
+        "type": "success",
+        "time": "2026-11-23 10:21:37",
+        "user": "Rayhan Jofan Halim"
+    },
+    {
         "id": "b84ff0eda3",
         "title": "Tugas kelompok dibuat",
         "detail": "Laporan Milestone",
