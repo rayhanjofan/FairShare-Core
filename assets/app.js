@@ -438,3 +438,72 @@ function toast(message) {
     });
   });
 })();
+
+// ==========================================
+// FAIRSHARE CONTRIBUTION BAR CHART TOOLTIP
+// ==========================================
+(() => {
+  const charts = document.querySelectorAll("[data-fs-bar-chart]");
+  if (!charts.length) return;
+
+  charts.forEach((chart) => {
+    const plot = chart.querySelector("[data-fs-bar-plot]");
+    const tooltip = chart.querySelector("[data-fs-bar-tooltip]");
+    const cols = chart.querySelectorAll(".fs-bar-col");
+    if (!plot || !tooltip || !cols.length) return;
+
+    const ttDate = tooltip.querySelector("[data-tt-date]");
+    const ttDelta = tooltip.querySelector("[data-tt-delta]");
+    const ttEvents = tooltip.querySelector("[data-tt-events]");
+
+    const showTooltip = (col) => {
+      if (ttDate) ttDate.textContent = col.dataset.barDate || "";
+      if (ttDelta) ttDelta.textContent = col.dataset.barDelta || "0.00";
+      if (ttEvents) ttEvents.textContent = col.dataset.barEvents || "0 event";
+
+      tooltip.hidden = false;
+
+      const plotRect = plot.getBoundingClientRect();
+      const colRect = col.getBoundingClientRect();
+      const fill = col.querySelector(".fs-bar-fill");
+      const anchorRect = fill ? fill.getBoundingClientRect() : colRect;
+      const ttRect = tooltip.getBoundingClientRect();
+
+      const centerX = colRect.left - plotRect.left + colRect.width / 2;
+      const minLeft = 6;
+      const maxLeft = Math.max(minLeft, plotRect.width - ttRect.width - 6);
+      const left = Math.min(maxLeft, Math.max(minLeft, centerX - ttRect.width / 2));
+
+      const barTop = fill
+        ? anchorRect.top - plotRect.top
+        : plotRect.height - 28;
+      let top = barTop - ttRect.height - 10;
+      if (top < 4) {
+        top = Math.min(plotRect.height - ttRect.height - 4, Math.max(4, barTop + 10));
+      }
+
+      tooltip.style.left = `${Math.round(left)}px`;
+      tooltip.style.top = `${Math.round(top)}px`;
+    };
+
+    const hideTooltip = () => {
+      tooltip.hidden = true;
+    };
+
+    cols.forEach((col) => {
+      col.addEventListener("mouseenter", () => showTooltip(col));
+      col.addEventListener("focus", () => showTooltip(col));
+      col.addEventListener("click", () => showTooltip(col));
+      col.addEventListener("mouseleave", hideTooltip);
+      col.addEventListener("blur", hideTooltip);
+      col.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          hideTooltip();
+          col.blur();
+        }
+      });
+    });
+
+    plot.addEventListener("mouseleave", hideTooltip);
+  });
+})();

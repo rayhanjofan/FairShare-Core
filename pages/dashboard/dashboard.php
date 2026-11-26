@@ -123,19 +123,46 @@ $dayValues = array_values($trend['days']);
 $totalPoints = count($dayValues);
 $maxSum = $totalPoints > 0 ? (float) max(array_column($dayValues, 'sum')) : 0.0;
 $maxCount = $trend['total_events']; // dipakai untuk catatan grafik
-$upperBound = max(4, (int) ceil($maxSum));
 
-$points = [];
-$stepX = 640 / max(1, ($totalPoints - 1));
+// Skala dinamis sumbu Y (kelipatan 4 bulat, mulai dari 0, aman saat semua 0)
+$yStep = $maxSum <= 4.0 ? 1 : (int) ceil($maxSum / 4.0);
+$upperBound = $yStep * 4;
+$yTicks = [$upperBound, $yStep * 3, $yStep * 2, $yStep, 0];
 
-foreach ($dayValues as $idx => $d) {
-    $x = round($idx * $stepX, 1);
-    $y = round(155 - (($d['sum'] / $upperBound) * 130), 1);
-    $points[] = [
-        'x' => $x,
-        'y' => $y,
-        'title' => $d['label'] . ', ' . date('d/m', strtotime($d['date'])) . ': '
-            . number_format($d['sum'], 2) . ' filtered delta · ' . $d['count'] . ' event valid',
+$indoMonths = [
+    '01' => 'Januari', '02' => 'Februari', '03' => 'Maret', '04' => 'April',
+    '05' => 'Mei', '06' => 'Juni', '07' => 'Juli', '08' => 'Agustus',
+    '09' => 'September', '10' => 'Oktober', '11' => 'November', '12' => 'Desember',
+];
+$indoFullDays = [
+    'Min' => 'Minggu', 'Sen' => 'Senin', 'Sel' => 'Selasa',
+    'Rab' => 'Rabu', 'Kam' => 'Kamis', 'Jum' => 'Jumat', 'Sab' => 'Sabtu',
+];
+
+$barDays = [];
+foreach ($dayValues as $d) {
+    $parts = explode('-', (string) $d['date']);
+    $dayNum = isset($parts[2]) ? ltrim($parts[2], '0') : '';
+    $monthName = $indoMonths[$parts[1] ?? ''] ?? ($parts[1] ?? '');
+    $yearNum = $parts[0] ?? '';
+    $fullDate = trim($dayNum . ' ' . $monthName . ' ' . $yearNum);
+    $fullDay = $indoFullDays[$d['label']] ?? $d['label'];
+    $sumVal = (float) $d['sum'];
+    $evtCount = (int) $d['count'];
+    $heightPct = ($upperBound > 0 && $sumVal > 0.0)
+        ? min(100.0, round(($sumVal / $upperBound) * 100.0, 2))
+        : 0.0;
+
+    $barDays[] = [
+        'date' => (string) $d['date'],
+        'full_date' => $fullDate,
+        'full_day' => $fullDay,
+        'label' => (string) $d['label'],
+        'sum' => $sumVal,
+        'sum_formatted' => number_format($sumVal, 2),
+        'count' => $evtCount,
+        'height_pct' => $heightPct,
+        'aria_label' => $fullDay . ', ' . $fullDate . ': Filtered Delta ' . number_format($sumVal, 2) . ', ' . $evtCount . ' event valid',
     ];
 }
 
@@ -145,21 +172,6 @@ $factorValidEvents = (int) $trend['total_events'];
 $factorActiveDays = (int) $trend['active_days'];
 $factorVolumePct = min(100, $factorValidEvents * 20); // skala tampilan: 5 event valid = bar penuh
 $factorConsistencyPct = (int) round(($factorActiveDays / 7) * 100);
-
-$svgPath = "M {$points[0]['x']} {$points[0]['y']}";
-for ($i = 0; $i < count($points) - 1; $i++) {
-    $p0 = $points[$i];
-    $p1 = $points[$i + 1];
-    $cx = ($p0['x'] + $p1['x']) / 2;
-    $svgPath .= " C $cx {$p0['y']}, $cx {$p1['y']}, {$p1['x']} {$p1['y']}";
-}
-$svgArea = $svgPath . " L 640 180 L 0 180 Z";
-
-$chartYLabels = '<span>' . $upperBound . '</span>'
-    . '<span>' . round($upperBound * 0.75) . '</span>'
-    . '<span>' . round($upperBound * 0.5) . '</span>'
-    . '<span>' . round($upperBound * 0.25) . '</span>'
-    . '<span>0</span>';
 
 layout_start('Dashboard', 'dashboard');
 
@@ -286,20 +298,22 @@ page_heading(
     $quickActionHtml
 );
 
-// BANNER DASHBOARD: LOGO DI TENGAH RING A & B, LIVE WORKSPACE STABIL DI BAWAH DENGAN JARAK AMAN
+// WELCOME BANNER: ORBIT, LOGO, DAN LIVE WORKSPACE DALAM SATU CENTER ALIGNMENT
 echo '<section class="welcome-banner">
-    <div>
+    <div class="banner-copy">
         <span class="banner-overline">FAIRSHARE INSIGHT</span>
         <h2>Kolaborasi yang baik dimulai dari transparansi.</h2>
         <p>Semua progres penting tim dalam satu workspace.</p>
     </div>
-    <div class="banner-art" style="position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%;">
-        <div class="art-ring ring-a" style="position: absolute; top: calc(50% - 10px); left: 50%; transform: translate(-50%, -50%) scale(1.15);"></div>
-        <div class="art-ring ring-b" style="position: absolute; top: calc(50% - 10px); left: 50%; transform: translate(-50%, -50%) scale(1.15);"></div>
-        <div class="art-core art-logo" style="position: relative; top: -6px; right: 0; margin-bottom: 24px;">
-            <img src="assets/fairshare-logo.svg" alt="Logo FairShare">
+    <div class="banner-art">
+        <div class="banner-orbit-stage">
+            <span class="art-ring ring-a" aria-hidden="true"></span>
+            <span class="art-ring ring-b" aria-hidden="true"></span>
+            <div class="art-core art-logo">
+                <img src="assets/fairshare-logo.svg" alt="Logo FairShare">
+            </div>
         </div>
-        <div class="art-tag" style="position: relative; bottom: 0; right: 0; margin-top: 14px;">LIVE WORKSPACE</div>
+        <div class="art-tag">LIVE WORKSPACE</div>
     </div>
 </section>';
 ?>
@@ -375,9 +389,9 @@ echo '<section class="welcome-banner">
                     · Peran: <b><?= e(ucfirst($myRoleInGroup)) ?></b>
                 </small>
             </div>
-            <form method="get" action="dashboard.php" style="display:flex; align-items:center; gap:8px; margin:0;">
+            <form method="get" action="dashboard.php" class="dashboard-group-form" style="display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0; max-width:100%;">
                 <label for="dashboardGroupSelect" class="muted" style="font-size:12px; white-space:nowrap;">Pilih kelompok:</label>
-                <select id="dashboardGroupSelect" name="group_id" onchange="this.form.submit()" style="min-width:220px; padding:7px 10px; border-radius:8px; border:1px solid var(--border, #d8dce8); background:var(--surface, #ffffff); color:var(--text, #172033); font-size:13px;">
+                <select id="dashboardGroupSelect" name="group_id" onchange="this.form.submit()" style="flex:1 1 180px; min-width:0; max-width:100%; padding:7px 10px; border-radius:8px; border:1px solid var(--border, #d8dce8); background:var(--surface, #ffffff); color:var(--text, #172033); font-size:13px;">
                     <?php foreach ($groups as $gOpt): ?>
                         <?php
                             $optId = (string) $gOpt['id'];
@@ -475,28 +489,55 @@ echo '<section class="welcome-banner">
             <span><i></i> <?= $teacher ? 'Kontribusi valid kelompok' : ('Kontribusi valid kamu' . ($primaryGroup ? ' · ' . e($primaryGroup['name']) : '')) ?></span>
             <span class="legend-muted">7 hari terakhir · <?= (int) $trend['total_events'] ?> event valid · <?= number_format((float) $trend['total_filtered_delta'], 2) ?> filtered delta</span>
         </div>
-        <div class="chart-area">
-            <div class="chart-y"><?= $chartYLabels ?></div>
-            <svg viewBox="0 0 640 180" preserveAspectRatio="none" role="img" aria-label="Grafik tren kontribusi">
-                <defs>
-                    <linearGradient id="area" x1="0" x2="0" y1="0" y2="1">
-                        <stop offset="0%" stop-color="#7868ff" stop-opacity=".24"/>
-                        <stop offset="100%" stop-color="#7868ff" stop-opacity="0"/>
-                    </linearGradient>
-                </defs>
-                <path d="<?= $svgArea ?>" fill="url(#area)"/>
-                <path d="<?= $svgPath ?>" fill="none" stroke="#7564f7" stroke-width="3" stroke-linecap="round"/>
-                <?php foreach ($points as $pt): ?>
-                    <circle cx="<?= $pt['x'] ?>" cy="<?= $pt['y'] ?>" r="9" fill="transparent" style="cursor:help"><title><?= e($pt['title']) ?></title></circle>
+        <div class="fs-bar-chart" data-fs-bar-chart role="img" aria-label="Diagram batang tren kontribusi 7 hari terakhir (WIB)">
+            <div class="fs-bar-y" aria-hidden="true">
+                <?php foreach ($yTicks as $tick): ?>
+                    <span><?= (int) $tick ?></span>
                 <?php endforeach; ?>
-            </svg>
+            </div>
+            <div class="fs-bar-plot" data-fs-bar-plot>
+                <div class="fs-bar-grid" aria-hidden="true">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <div class="fs-bar-cols">
+                    <?php foreach ($barDays as $d): ?>
+                        <div class="fs-bar-col<?= $d['sum'] > 0 ? ' has-value' : ' is-zero' ?>"
+                             tabindex="0"
+                             role="button"
+                             aria-label="<?= e($d['aria_label']) ?>"
+                             title="<?= e($d['full_date'] . ' · Filtered Delta: ' . $d['sum_formatted'] . ' · Valid Events: ' . $d['count'] . ' event') ?>"
+                             data-bar-date="<?= e($d['full_date']) ?>"
+                             data-bar-delta="<?= e($d['sum_formatted']) ?>"
+                             data-bar-events="<?= (int) $d['count'] ?> event">
+                            <div class="fs-bar-track">
+                                <?php if ($d['sum'] > 0): ?>
+                                    <span class="fs-bar-fill" style="height: <?= number_format($d['height_pct'], 2, '.', '') ?>%;"></span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+                <div class="fs-bar-tooltip" data-fs-bar-tooltip role="tooltip" hidden>
+                    <div class="fs-bar-tooltip-date" data-tt-date></div>
+                    <div class="fs-bar-tooltip-row"><span>Filtered Delta</span><strong data-tt-delta></strong></div>
+                    <div class="fs-bar-tooltip-row"><span>Valid Events</span><strong data-tt-events></strong></div>
+                </div>
+            </div>
         </div>
-        <div class="chart-x"><?php foreach ($dayValues as $d): ?><span title="<?= e(date('d/m/Y', strtotime($d['date'])) . ': ' . number_format($d['sum'], 2) . ' filtered delta · ' . $d['count'] . ' event valid') ?>"><?= e($d['label']) ?></span><?php endforeach; ?></div>
+        <div class="fs-bar-x" aria-hidden="true">
+            <?php foreach ($barDays as $d): ?>
+                <span title="<?= e($d['full_date']) ?>"><?= e($d['label']) ?></span>
+            <?php endforeach; ?>
+        </div>
         <div class="chart-note"><?php
             if ($trend['error'] !== null) {
                 echo e($trend['error']);
             } elseif ($maxCount > 0) {
-                echo 'Sumber: telemetri tervalidasi (sama dengan dasar perhitungan WEI). Arahkan kursor ke titik untuk melihat jumlah event valid.';
+                echo 'Sumber: telemetri tervalidasi (sama dengan dasar perhitungan WEI). Arahkan kursor atau fokuskan batang untuk melihat detail harian.';
             } else {
                 echo 'Belum ada aktivitas tervalidasi dalam 7 hari terakhir.';
             }
