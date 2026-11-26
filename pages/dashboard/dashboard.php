@@ -90,62 +90,72 @@ if ($teacher) {
 }
 
 // ==============================================================
-// PENGOLAHAN GRAFIK DINAMIS (TELEMETRI + ACTIVITY.JSON LOKAL)
+// PENGOLAHAN GRAFIK DINAMIS (TELEMETRI + ACTIVITY.JSON LOKAL) – UPDATED
 // ==============================================================
 $indoDays = ['Sun' => 'Min', 'Mon' => 'Sen', 'Tue' => 'Sel', 'Wed' => 'Rab', 'Thu' => 'Kam', 'Fri' => 'Jum', 'Sat' => 'Sab'];
 $chartDays = [];
 
-for ($i = 6; $i >= 0; $i--) {
-    $ts = strtotime("-$i days");
-    $dKey = date('Y-m-d', $ts);
-    $engDay = date('D', $ts);
-    $chartDays[$dKey] = [
+// Build date range for 7 calendar days (today + 6 previous) in Asia/Jakarta timezone
+$tzJakarta = new DateTimeZone('Asia/Jakarta');
+$todayJakarta = new DateTime('now', $tzJakarta);
+$todayJakarta->setTime(0, 0, 0); // start of today (midnight WIB)
+$startJakarta = (clone $todayJakarta)->modify('-6 days');
+
+$period = new DatePeriod($startJakarta, new DateInterval('P1D'), (clone $todayJakarta)->modify('+1 day'));
+foreach ($period as $dt) {
+    $key = $dt->format('Y-m-d');
+    $engDay = $dt->format('D');
+    $chartDays[$key] = [
         'label' => $indoDays[$engDay] ?? $engDay,
-        'count' => 0
+        'sum'   => 0.0,
+        'count' => 0,
     ];
 }
 
-foreach ($mine as $l) {
-    $rawDate = $l['date'] ?? $l['created_at'] ?? $l['activity_timestamp'] ?? '';
-    if (!empty($rawDate)) {
-        $pDate = date('Y-m-d', strtotime((string)$rawDate));
-        if (isset($chartDays[$pDate])) {
-            $chartDays[$pDate]['count']++;
-        }
-    }
-}
+// Prepare SQL query to aggregate telemetry per day with required filters
+$sql = "SELECT 
+    (tl.activity_timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta')::date AS activity_date,
+    SUM(tl.filtered_delta) AS total_filtered_delta,
+    COUNT(*) AS valid_event_count
+FROM public.telemetry_logs tl
+JOIN public.tasks t ON t.id = tl.task_id AND t.group_id = tl.group_id
+WHERE tl.task_id IS NOT NULL
+  AND tl.user_id IS NOT NULL
+  AND tl.source IN ('gdocs', 'github')
+  AND tl.raw_delta >= 0
+  AND tl.filtered_delta > 0
+  AND LOWER(TRIM(COALESCE(tl.metadata->>'validation_status', ''))) IN ('valid', 'verified', 'terverifikasi')
+  AND COALESCE(tl.metadata->>'entry_mode', '') <> 'manual_test'
+  AND (tl.activity_timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta')::date BETWEEN :start_date AND :end_date
+  AND tl.group_id = ANY(:group_ids)
+GROUP BY activity_date
+ORDER BY activity_date";
 
-foreach ($activity as $act) {
-    $rawTime = $act['time'] ?? $act['timestamp'] ?? $act['date'] ?? '';
-    if (!empty($rawTime)) {
-        $pDate = date('Y-m-d', strtotime((string)$rawTime));
-        if (isset($chartDays[$pDate])) {
-            $chartDays[$pDate]['count']++;
-        }
-    }
-}
+$stmt = $pdo->prepare($sql);
+$stmt->execute([
+    ':start_date' => $startJakarta->format('Y-m-d'),
+    ':end_date'   => $todayJakarta->format('Y-m-d'),
+    ':group_ids'  => $groupIds,
+]);
 
-foreach ($tasks as $t) {
-    $rawDate = $t['created_at'] ?? $t['updated_at'] ?? '';
-    if (!empty($rawDate)) {
-        $pDate = date('Y-m-d', strtotime((string)$rawDate));
-        if (isset($chartDays[$pDate])) {
-            $chartDays[$pDate]['count']++;
-        }
+while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    $dateKey = $row['activity_date'];
+    if (isset($chartDays[$dateKey])) {
+        $chartDays[$dateKey]['sum']   = (float) $row['total_filtered_delta'];
+        $chartDays[$dateKey]['count'] = (int) $row['valid_event_count'];
     }
 }
 
 $dayValues = array_values($chartDays);
 $totalPoints = count($dayValues);
-$maxCount = max(array_column($dayValues, 'count'));
-$upperBound = max(4, $maxCount);
+$maxSum = max(array_column($dayValues, 'sum'));
+$upperBound = max(4, $maxSum);
 
 $points = [];
 $stepX = 640 / max(1, ($totalPoints - 1));
-
 foreach ($dayValues as $idx => $d) {
     $x = round($idx * $stepX, 1);
-    $y = round(155 - (($d['count'] / $upperBound) * 130), 1);
+    $y = round(155 - (($d['sum'] / $upperBound) * 130), 1);
     $points[] = ['x' => $x, 'y' => $y];
 }
 
