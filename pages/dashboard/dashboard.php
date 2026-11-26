@@ -113,30 +113,70 @@ foreach ($period as $dt) {
 }
 
 // Prepare SQL query to aggregate telemetry per day with required filters
-$sql = "SELECT 
-    (tl.activity_timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta')::date AS activity_date,
+$sql = "SELECT
+    (tl.activity_timestamp AT TIME ZONE 'UTC'
+        AT TIME ZONE 'Asia/Jakarta')::date AS activity_date,
     SUM(tl.filtered_delta) AS total_filtered_delta,
     COUNT(*) AS valid_event_count
 FROM public.telemetry_logs tl
-JOIN public.tasks t ON t.id = tl.task_id AND t.group_id = tl.group_id
+JOIN public.tasks t
+    ON t.id = tl.task_id
+   AND t.group_id = tl.group_id
 WHERE tl.task_id IS NOT NULL
   AND tl.user_id IS NOT NULL
   AND tl.source IN ('gdocs', 'github')
   AND tl.raw_delta >= 0
   AND tl.filtered_delta > 0
-  AND LOWER(TRIM(COALESCE(tl.metadata->>'validation_status', ''))) IN ('valid', 'verified', 'terverifikasi')
-  AND COALESCE(tl.metadata->>'entry_mode', '') <> 'manual_test'
-  AND (tl.activity_timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jakarta')::date BETWEEN :start_date AND :end_date
-  AND tl.group_id = ANY(:group_ids)
+  AND LOWER(TRIM(COALESCE(
+      tl.metadata->>'validation_status', ''
+  ))) IN ('valid', 'verified', 'terverifikasi')
+  AND COALESCE(
+      tl.metadata->>'entry_mode', ''
+  ) <> 'manual_test'
+  AND (tl.activity_timestamp AT TIME ZONE 'UTC'
+       AT TIME ZONE 'Asia/Jakarta')::date
+      BETWEEN :start_date AND :end_date
+  AND tl.group_id = ANY(CAST(:group_ids AS uuid[]))
 GROUP BY activity_date
 ORDER BY activity_date";
 
+// Convert PHP UUID array into PostgreSQL UUID array literal.
+$groupIds = array_values($groupIds);
+
+if (empty($groupIds)) {
+    throw new RuntimeException('No group IDs available for contribution chart.');
+}
+
+foreach ($groupIds as $groupId) {
+    if (
+        !is_string($groupId) ||
+        !preg_match(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
+            $groupId
+        )
+    ) {
+        throw new RuntimeException('Invalid group UUID.');
+    }
+}
+
+$groupIdsParam = '{' . implode(',', $groupIds) . '}';
+
 $stmt = $pdo->prepare($sql);
+
 $stmt->execute([
     ':start_date' => $startJakarta->format('Y-m-d'),
     ':end_date'   => $todayJakarta->format('Y-m-d'),
-    ':group_ids'  => $groupIds,
+    ':group_ids'  => $groupIdsParam,
 ]);
+
+while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    $dateKey = $row['activity_date'];
+
+    if (isset($chartDays[$dateKey])) {
+        $chartDays[$dateKey]['sum'] = (float) $row['total_filtered_delta'];
+        $chartDays[$dateKey]['count'] = (int) $row['valid_event_count'];
+    }
+}
 
 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $dateKey = $row['activity_date'];
