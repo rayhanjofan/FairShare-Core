@@ -903,6 +903,200 @@ function score_for_user(string $userId, ?string $groupId = null): float
 }
 
 // ============================================================
+// STATUS INTEGRASI API (GOOGLE / GITHUB / DLL)
+// ============================================================
+
+/**
+ * Memvalidasi apakah rekaman user_integrations memenuhi syarat koneksi API aktif.
+ *
+ * @param array $integ Baris dari public.user_integrations
+ * @param int|null $now Timestamp acuan waktu saat ini (opsional, default: time())
+ * @return bool
+ */
+function fs_is_integration_active(array $integ, ?int $now = null): bool
+{
+    $now = $now ?? time();
+    $provider = strtolower(trim((string) ($integ['provider'] ?? '')));
+    $accessToken = trim((string) ($integ['access_token_encrypted'] ?? ''));
+    $refreshToken = trim((string) ($integ['refresh_token_encrypted'] ?? ''));
+    $tokenExpiresAt = trim((string) ($integ['token_expires_at'] ?? ''));
+    $scopes = (string) ($integ['scopes'] ?? '');
+
+    // Token akses tidak boleh kosong
+    if ($accessToken === '') {
+        return false;
+    }
+
+    // Evaluasi kedaluwarsa token:
+    // Jika token sudah kedaluwarsa, wajib memiliki refresh token agar dapat diperbarui/tetap terhubung.
+    // Jika kedaluwarsa tanpa refresh token, koneksi dianggap tidak aktif.
+    if ($tokenExpiresAt !== '') {
+        $expiresTs = strtotime($tokenExpiresAt . (str_ends_with($tokenExpiresAt, 'Z') ? '' : ' UTC'));
+        if ($expiresTs !== false && $expiresTs <= $now) {
+            if ($refreshToken === '') {
+                return false;
+            }
+        }
+    }
+
+    // Provider Google: wajib memiliki scope drive.activity
+    if ($provider === 'google') {
+        if (!function_exists('fs_google_has_activity_scope')) {
+            $googleServicePath = dirname(__DIR__) . '/integrations/google/google_service.php';
+            if (file_exists($googleServicePath)) {
+                require_once $googleServicePath;
+            }
+        }
+        if (function_exists('fs_google_has_activity_scope')) {
+            return fs_google_has_activity_scope($scopes);
+        }
+        return (strpos($scopes, 'drive.activity.readonly') !== false || strpos($scopes, 'drive.activity') !== false);
+    }
+
+    // GitHub: belum diimplementasikan sebagai koneksi API OAuth aktif (hanya profil username)
+    if ($provider === 'github') {
+        return false;
+    }
+
+    return false;
+}
+
+/**
+ * Menghasilkan ringkasan status sumber API terhubung untuk kartu indikator pada audit.php.
+ *
+ * @param array $user Data pengguna login
+ * @param PDO|null $pdo Instance PDO opsional
+ * @param int|null $now Timestamp waktu acuan opsional (default: time())
+ * @return array{
+ *     active_provider_count: int,
+ *     connected_account_count: int,
+ *     providers: array<string>,
+ *     stat_number_html: string,
+ *     foot_text: string,
+ *     card_tooltip: string,
+ *     details_by_provider: array<string, int>
+ * }
+ */
+function fs_get_api_integrations_summary(array $user, ?PDO $pdo = null, ?int $now = null): array
+{
+    $userId = (string) ($user['id'] ?? '');
+    $teacher = is_teacher($user);
+    $tooltip = $teacher
+        ? 'Integrasi dari mahasiswa pada kelas yang Anda kelola.'
+        : 'Integrasi API yang terhubung pada akun Anda.';
+
+    if (!valid_uuid($userId)) {
+        return [
+            'active_provider_count' => 0,
+            'connected_account_count' => 0,
+            'providers' => [],
+            'stat_number_html' => '0<small> aktif</small>',
+            'foot_text' => 'Belum ada sumber API yang terhubung.',
+            'card_tooltip' => $tooltip,
+            'details_by_provider' => [],
+        ];
+    }
+
+    $pdo = $pdo ?? require_db();
+
+    if ($teacher) {
+        $stmt = $pdo->prepare("
+            SELECT
+                ui.user_id::text AS user_id,
+                ui.provider,
+                ui.provider_email,
+                ui.access_token_encrypted,
+                ui.refresh_token_encrypted,
+                ui.token_expires_at::text AS token_expires_at,
+                ui.scopes
+            FROM public.user_integrations ui
+            WHERE ui.user_id IN (
+                SELECT DISTINCT gm.user_id
+                FROM public.group_members gm
+                JOIN public.groups g ON g.id = gm.group_id
+                JOIN public.users u ON u.id = gm.user_id
+                WHERE u.role = 'mahasiswa'
+                  AND (
+                    (g.group_type = 'class' AND g.created_by = CAST(:dosen_id AS uuid))
+                    OR (g.group_type = 'team' AND (
+                        g.created_by = CAST(:dosen_id AS uuid)
+                        OR g.parent_group_id IN (
+                            SELECT p.id FROM public.groups p WHERE p.group_type = 'class' AND p.created_by = CAST(:dosen_id AS uuid)
+                        )
+                    ))
+                  )
+            )
+        ");
+        $stmt->execute(['dosen_id' => $userId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } else {
+        $stmt = $pdo->prepare("
+            SELECT
+                ui.user_id::text AS user_id,
+                ui.provider,
+                ui.provider_email,
+                ui.access_token_encrypted,
+                ui.refresh_token_encrypted,
+                ui.token_expires_at::text AS token_expires_at,
+                ui.scopes
+            FROM public.user_integrations ui
+            WHERE ui.user_id = CAST(:user_id AS uuid)
+        ");
+        $stmt->execute(['user_id' => $userId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    $activeProviders = [];
+    $detailsByProvider = [];
+    $activeAccountUserIds = [];
+
+    foreach ($rows as $row) {
+        if (!fs_is_integration_active($row, $now)) {
+            continue;
+        }
+        $prov = strtolower(trim((string) ($row['provider'] ?? '')));
+        if (!in_array($prov, $activeProviders, true)) {
+            $activeProviders[] = $prov;
+        }
+        $detailsByProvider[$prov] = ($detailsByProvider[$prov] ?? 0) + 1;
+        $activeAccountUserIds[$row['user_id']] = true;
+    }
+
+    $providerCount = count($activeProviders);
+    $connectedAccountCount = count($activeAccountUserIds);
+
+    // Format nama tampilan provider
+    $providerLabels = [];
+    foreach ($activeProviders as $p) {
+        if ($p === 'google') {
+            $providerLabels[] = 'Google Drive Activity API';
+        } else {
+            $providerLabels[] = ucfirst($p) . ' API';
+        }
+    }
+
+    if ($providerCount === 0) {
+        $footText = 'Belum ada sumber API yang terhubung.';
+    } else {
+        if ($teacher) {
+            $footText = implode(', ', $providerLabels) . ' terhubung (' . $connectedAccountCount . ' akun terhubung).';
+        } else {
+            $footText = implode(', ', $providerLabels) . ' terhubung.';
+        }
+    }
+
+    return [
+        'active_provider_count' => $providerCount,
+        'connected_account_count' => $connectedAccountCount,
+        'providers' => $activeProviders,
+        'stat_number_html' => $providerCount . '<small> aktif</small>',
+        'foot_text' => $footText,
+        'card_tooltip' => $tooltip,
+        'details_by_provider' => $detailsByProvider,
+    ];
+}
+
+// ============================================================
 // TAMPILAN / LAYOUT
 // ============================================================
 
