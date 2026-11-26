@@ -52,18 +52,37 @@ if ($teacher) {
     $pendingTelemetryCount = count(array_filter($mine, fn($l) => in_array(($l['validation_status'] ?? ''), ['pending', 'menunggu kalibrasi bobot'], true)));
     $rejectedTelemetryCount = count(array_filter($mine, fn($l) => ($l['validation_status'] ?? '') === 'rejected'));
 } else {
-    // 2. Mahasiswa: Ambil data tim pertama/utama & analitik diri sendiri
-    $primaryGroup = $groups[0] ?? null;
-    $primaryGroupId = $primaryGroup ? (string) $primaryGroup['id'] : '';
+    // 2. Mahasiswa: Resolusi kelompok aktif (server-side validated & session-persisted)
+    $requestedGroupId = isset($_GET['group_id']) ? (string) $_GET['group_id'] : null;
+    $resolvedGroup = fs_resolve_student_dashboard_group($user, $groups, $requestedGroupId, $_SESSION, $pdo);
+    $primaryGroup = $resolvedGroup['group'];
+    $primaryGroupId = $resolvedGroup['group_id'];
+    $rejectedGroupRequest = $resolvedGroup['rejected_request'];
 
-    // Progres tugas tim dari fn_task_progress
-    $teamProgress = $primaryGroupId ? fs_get_task_progress($primaryGroupId, $pdo) : null;
+    // Filter daftar tugas dashboard khusus kelompok terpilih (tidak dicampur antarkelompok)
+    $tasks = $primaryGroupId !== ''
+        ? array_values(array_filter($tasks, fn($t) => strtolower((string) ($t['group_id'] ?? '')) === strtolower($primaryGroupId)))
+        : [];
+
+    // Informasi anggota kelompok terpilih
+    $selectedMembers = is_array($primaryGroup['members'] ?? null) ? $primaryGroup['members'] : [];
+    $selectedMemberCount = count($selectedMembers);
+    $myRoleInGroup = 'anggota';
+    foreach ($selectedMembers as $sm) {
+        if (strtolower((string) ($sm['user_id'] ?? '')) === strtolower($userId)) {
+            $myRoleInGroup = (string) ($sm['role_in_group'] ?? 'anggota');
+            break;
+        }
+    }
+
+    // Progres tugas tim dari fn_task_progress (khusus kelompok terpilih)
+    $teamProgress = $primaryGroupId !== '' ? fs_get_task_progress($primaryGroupId, $pdo) : null;
     $teamTotalTasks = (int) ($teamProgress['total_tasks'] ?? count($tasks));
     $teamCompletedTasks = (int) ($teamProgress['completed_tasks'] ?? count(array_filter($tasks, fn($t) => ($t['status_db'] ?? '') === 'done')));
     $teamProgressPct = $teamProgress ? (float) $teamProgress['completion_percentage'] : ($teamTotalTasks > 0 ? round(($teamCompletedTasks / $teamTotalTasks) * 100, 1) : 0.0);
 
-    // Ringkasan kontribusi pribadi dari v_team_contribution_summary
-    $myContribution = $primaryGroupId ? fs_get_user_team_contribution($primaryGroupId, $userId, $pdo) : null;
+    // Ringkasan kontribusi pribadi dari v_team_contribution_summary (khusus kelompok terpilih)
+    $myContribution = $primaryGroupId !== '' ? fs_get_user_team_contribution($primaryGroupId, $userId, $pdo) : null;
     $myRawDelta = (float) ($myContribution['total_raw_delta'] ?? 0.0);
     $myFilteredDelta = (float) ($myContribution['total_filtered_delta'] ?? 0.0);
     $myValidEvents = (int) ($myContribution['valid_events'] ?? 0);
@@ -71,8 +90,8 @@ if ($teacher) {
     $myRejectedEvents = (int) ($myContribution['rejected_events'] ?? 0);
     $myLastActivityAt = $myContribution['last_activity_at'] ?? null;
 
-    // WEI dari PostgreSQL function fn_group_wei_summary
-    $groupWeiRows = $primaryGroupId ? fs_get_group_wei_summary($primaryGroupId, $pdo) : [];
+    // WEI dari PostgreSQL function fn_group_wei_summary (khusus kelompok terpilih)
+    $groupWeiRows = $primaryGroupId !== '' ? fs_get_group_wei_summary($primaryGroupId, $pdo) : [];
     $myWeiRow = null;
     $teamHasValidEvents = false;
     foreach ($groupWeiRows as $gw) {
@@ -84,70 +103,48 @@ if ($teacher) {
         }
     }
 
-    $myWeiScore = $myWeiRow !== null ? (float) $myWeiRow['wei_percentage'] : 0.0;
+    $myWeiScore = ($myWeiRow !== null && $myWeiRow['wei_percentage'] !== null) ? (float) $myWeiRow['wei_percentage'] : 0.0;
     $myWeiDataStatus = $myWeiRow['data_status'] ?? 'Belum Cukup Data';
     $myWeiStatus = fs_determine_wei_status($myValidEvents, $teamHasValidEvents ? 1 : 0, $myWeiDataStatus);
 }
 
 // ==============================================================
-// PENGOLAHAN GRAFIK DINAMIS (TELEMETRI + ACTIVITY.JSON LOKAL)
+// CONTRIBUTION TREND: HANYA TELEMETRI TERVALIDASI (public.telemetry_logs)
+// Nilai grafik = SUM(filtered_delta) per hari WIB; tooltip = COUNT(*) event valid.
+// Filter identik dengan fn_group_wei_summary. activity.json & tasks TIDAK dipakai.
+// Dosen: seluruh kelompok di kelas miliknya.
+// Mahasiswa: telemetri miliknya khusus pada kelompok terpilih ($primaryGroupId).
 // ==============================================================
-$indoDays = ['Sun' => 'Min', 'Mon' => 'Sen', 'Tue' => 'Sel', 'Wed' => 'Rab', 'Thu' => 'Kam', 'Fri' => 'Jum', 'Sat' => 'Sab'];
-$chartDays = [];
-
-for ($i = 6; $i >= 0; $i--) {
-    $ts = strtotime("-$i days");
-    $dKey = date('Y-m-d', $ts);
-    $engDay = date('D', $ts);
-    $chartDays[$dKey] = [
-        'label' => $indoDays[$engDay] ?? $engDay,
-        'count' => 0
-    ];
-}
-
-foreach ($mine as $l) {
-    $rawDate = $l['date'] ?? $l['created_at'] ?? $l['activity_timestamp'] ?? '';
-    if (!empty($rawDate)) {
-        $pDate = date('Y-m-d', strtotime((string)$rawDate));
-        if (isset($chartDays[$pDate])) {
-            $chartDays[$pDate]['count']++;
-        }
-    }
-}
-
-foreach ($activity as $act) {
-    $rawTime = $act['time'] ?? $act['timestamp'] ?? $act['date'] ?? '';
-    if (!empty($rawTime)) {
-        $pDate = date('Y-m-d', strtotime((string)$rawTime));
-        if (isset($chartDays[$pDate])) {
-            $chartDays[$pDate]['count']++;
-        }
-    }
-}
-
-foreach ($tasks as $t) {
-    $rawDate = $t['created_at'] ?? $t['updated_at'] ?? '';
-    if (!empty($rawDate)) {
-        $pDate = date('Y-m-d', strtotime((string)$rawDate));
-        if (isset($chartDays[$pDate])) {
-            $chartDays[$pDate]['count']++;
-        }
-    }
-}
-
-$dayValues = array_values($chartDays);
+$trendGroupIds = $teacher
+    ? $groupIds
+    : ($primaryGroupId !== '' ? [$primaryGroupId] : []);
+$trend = fs_get_valid_contribution_trend($pdo, $trendGroupIds, $teacher ? null : $userId);
+$dayValues = array_values($trend['days']);
 $totalPoints = count($dayValues);
-$maxCount = count($dayValues) > 0 ? max(array_column($dayValues, 'count')) : 0;
-$upperBound = max(4, $maxCount);
+$maxSum = $totalPoints > 0 ? (float) max(array_column($dayValues, 'sum')) : 0.0;
+$maxCount = $trend['total_events']; // dipakai untuk catatan grafik
+$upperBound = max(4, (int) ceil($maxSum));
 
 $points = [];
 $stepX = 640 / max(1, ($totalPoints - 1));
 
 foreach ($dayValues as $idx => $d) {
     $x = round($idx * $stepX, 1);
-    $y = round(155 - (($d['count'] / $upperBound) * 130), 1);
-    $points[] = ['x' => $x, 'y' => $y];
+    $y = round(155 - (($d['sum'] / $upperBound) * 130), 1);
+    $points[] = [
+        'x' => $x,
+        'y' => $y,
+        'title' => $d['label'] . ', ' . date('d/m', strtotime($d['date'])) . ': '
+            . number_format($d['sum'], 2) . ' filtered delta · ' . $d['count'] . ' event valid',
+    ];
 }
+
+// Indikator pendukung Faktor WEI (7 hari terakhir, telemetri tervalidasi, WIB).
+// Bukan komponen rumus WEI; rumus WEI tetap pada fn_group_wei_summary.
+$factorValidEvents = (int) $trend['total_events'];
+$factorActiveDays = (int) $trend['active_days'];
+$factorVolumePct = min(100, $factorValidEvents * 20); // skala tampilan: 5 event valid = bar penuh
+$factorConsistencyPct = (int) round(($factorActiveDays / 7) * 100);
 
 $svgPath = "M {$points[0]['x']} {$points[0]['y']}";
 for ($i = 0; $i < count($points) - 1; $i++) {
@@ -157,11 +154,6 @@ for ($i = 0; $i < count($points) - 1; $i++) {
     $svgPath .= " C $cx {$p0['y']}, $cx {$p1['y']}, {$p1['x']} {$p1['y']}";
 }
 $svgArea = $svgPath . " L 640 180 L 0 180 Z";
-
-$chartXLabels = '';
-foreach ($dayValues as $d) {
-    $chartXLabels .= '<span>' . e($d['label']) . '</span>';
-}
 
 $chartYLabels = '<span>' . $upperBound . '</span>'
     . '<span>' . round($upperBound * 0.75) . '</span>'
@@ -367,6 +359,43 @@ echo '<section class="welcome-banner">
         </article>
     </div>
 <?php else: ?>
+    <?php if (!empty($rejectedGroupRequest)): ?>
+        <div class="alert warning" role="alert" style="margin-bottom:14px;">
+            Akses ke kelompok yang diminta tidak diizinkan. Menampilkan kelompok aktif yang kamu ikuti.
+        </div>
+    <?php endif; ?>
+
+    <?php if (count($groups) > 1): ?>
+        <section class="panel" style="margin-bottom:16px; padding:14px 18px; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px;">
+            <div style="display:flex; flex-direction:column; gap:2px;">
+                <span class="stat-label" style="font-size:11px;">KELOMPOK AKTIF DASHBOARD</span>
+                <small class="muted">
+                    <?= e($primaryGroup['parent_class_name'] ?? ($primaryGroup['course'] ?? 'Kelas')) ?>
+                    · <?= (int) $selectedMemberCount ?> anggota
+                    · Peran: <b><?= e(ucfirst($myRoleInGroup)) ?></b>
+                </small>
+            </div>
+            <form method="get" action="dashboard.php" style="display:flex; align-items:center; gap:8px; margin:0;">
+                <label for="dashboardGroupSelect" class="muted" style="font-size:12px; white-space:nowrap;">Pilih kelompok:</label>
+                <select id="dashboardGroupSelect" name="group_id" onchange="this.form.submit()" style="min-width:220px; padding:7px 10px; border-radius:8px; border:1px solid var(--border, #d8dce8); background:var(--surface, #ffffff); color:var(--text, #172033); font-size:13px;">
+                    <?php foreach ($groups as $gOpt): ?>
+                        <?php
+                            $optId = (string) $gOpt['id'];
+                            $optSelected = strtolower($optId) === strtolower($primaryGroupId);
+                            $optClass = trim((string) ($gOpt['parent_class_name'] ?? ($gOpt['course'] ?? '')));
+                            $optLabel = (string) $gOpt['name'] . ($optClass !== '' ? ' — ' . $optClass : '');
+                        ?>
+                        <option value="<?= e($optId) ?>" <?= $optSelected ? 'selected' : '' ?>><?= e($optLabel) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <noscript><button class="btn secondary small" type="submit">Tampilkan</button></noscript>
+                <?php if ($primaryGroupId !== ''): ?>
+                    <a class="btn secondary small" href="team_detail.php?id=<?= urlencode($primaryGroupId) ?>">Detail tim ↗</a>
+                <?php endif; ?>
+            </form>
+        </section>
+    <?php endif; ?>
+
     <div class="stats-grid">
         <article class="stat-card">
             <div class="stat-top">
@@ -399,7 +428,7 @@ echo '<section class="welcome-banner">
             <div class="stat-number"><?= count($groups) ?><small> kelompok</small></div>
             <div class="stat-foot">
                 <span class="pill blue-pill"><?= count($myClasses) ?> kelas diikuti</span>
-                <span class="muted">ruang kolaborasi</span>
+                <span class="muted"><?= $primaryGroup ? ((int) $selectedMemberCount . ' anggota · ' . e(ucfirst($myRoleInGroup))) : 'ruang kolaborasi' ?></span>
             </div>
         </article>
 
@@ -438,13 +467,13 @@ echo '<section class="welcome-banner">
         <div class="panel-heading">
             <div>
                 <div class="panel-title">Tren kontribusi</div>
-                <div class="panel-sub">Aktivitas mingguan dari telemetri dan log tugas</div>
+                <div class="panel-sub">Filtered delta harian dari telemetri tervalidasi (WIB)</div>
             </div>
             <a class="text-link" href="<?= $teacher ? 'classroom.php' : 'contributions.php' ?>">Detail kontribusi ↗</a>
         </div>
         <div class="chart-legend">
-            <span><i></i> <?= $teacher ? 'Aktivitas kelompok' : 'Aktivitas kamu' ?></span>
-            <span class="legend-muted">7 hari terakhir</span>
+            <span><i></i> <?= $teacher ? 'Kontribusi valid kelompok' : ('Kontribusi valid kamu' . ($primaryGroup ? ' · ' . e($primaryGroup['name']) : '')) ?></span>
+            <span class="legend-muted">7 hari terakhir · <?= (int) $trend['total_events'] ?> event valid · <?= number_format((float) $trend['total_filtered_delta'], 2) ?> filtered delta</span>
         </div>
         <div class="chart-area">
             <div class="chart-y"><?= $chartYLabels ?></div>
@@ -457,10 +486,21 @@ echo '<section class="welcome-banner">
                 </defs>
                 <path d="<?= $svgArea ?>" fill="url(#area)"/>
                 <path d="<?= $svgPath ?>" fill="none" stroke="#7564f7" stroke-width="3" stroke-linecap="round"/>
+                <?php foreach ($points as $pt): ?>
+                    <circle cx="<?= $pt['x'] ?>" cy="<?= $pt['y'] ?>" r="9" fill="transparent" style="cursor:help"><title><?= e($pt['title']) ?></title></circle>
+                <?php endforeach; ?>
             </svg>
         </div>
-        <div class="chart-x"><?= $chartXLabels ?></div>
-        <div class="chart-note"><?= $maxCount > 0 ? 'Data diperbarui otomatis dari log aktivitas workspace kamu.' : 'Belum ada aktivitas tercatat dalam 7 hari terakhir.' ?></div>
+        <div class="chart-x"><?php foreach ($dayValues as $d): ?><span title="<?= e(date('d/m/Y', strtotime($d['date'])) . ': ' . number_format($d['sum'], 2) . ' filtered delta · ' . $d['count'] . ' event valid') ?>"><?= e($d['label']) ?></span><?php endforeach; ?></div>
+        <div class="chart-note"><?php
+            if ($trend['error'] !== null) {
+                echo e($trend['error']);
+            } elseif ($maxCount > 0) {
+                echo 'Sumber: telemetri tervalidasi (sama dengan dasar perhitungan WEI). Arahkan kursor ke titik untuk melihat jumlah event valid.';
+            } else {
+                echo 'Belum ada aktivitas tervalidasi dalam 7 hari terakhir.';
+            }
+        ?></div>
     </section>
 
     <!-- FAKTOR WEI -->
@@ -468,24 +508,24 @@ echo '<section class="welcome-banner">
         <div class="panel-heading">
             <div>
                 <div class="panel-title">Faktor WEI</div>
-                <div class="panel-sub">Komponen indeks kontribusi</div>
+                <div class="panel-sub">Indikator pendukung · telemetri tervalidasi 7 hari terakhir</div>
             </div>
-            <span class="help-dot" title="WEI merupakan indikator pendukung, bukan nilai akhir mata kuliah">?</span>
+            <span class="help-dot" title="Indikator pendukung dashboard, bukan komponen rumus WEI dan bukan nilai akhir mata kuliah. Rumus WEI dihitung oleh fn_group_wei_summary.">?</span>
         </div>
         <div class="factor-item">
             <div class="factor-head">
-                <span>Volume aktivitas</span>
-                <b style="color: #ffffff !important;"><?= min(100, count($activity) * 20) ?>%</b>
+                <span title="Jumlah event telemetri valid (filter sama dengan WEI) dalam 7 hari terakhir. Skala tampilan: 5 event = bar penuh.">Volume aktivitas</span>
+                <b style="color: #ffffff !important;"><?= $factorValidEvents ?> event</b>
             </div>
-            <div class="factor-track"><span style="width:<?= min(100, count($activity) * 20) ?>%"></span></div>
+            <div class="factor-track"><span style="width:<?= $factorVolumePct ?>%"></span></div>
         </div>
         <div class="factor-item">
             <div class="factor-head">
-                <span>Konsistensi temporal</span>
-                <b style="color: #ffffff !important;"><?= min(100, count(array_unique(array_map(fn($a) => substr((string)($a['time'] ?? ''), 0, 10), $activity))) * 25) ?>%</b>
+                <span title="Jumlah hari (WIB) yang memiliki minimal satu event telemetri valid dari 7 hari terakhir.">Konsistensi temporal</span>
+                <b style="color: #ffffff !important;"><?= $factorActiveDays ?>/7 hari · <?= $factorConsistencyPct ?>%</b>
             </div>
             <div class="factor-track">
-                <span style="width:<?= min(100, count(array_unique(array_map(fn($a) => substr((string)($a['time'] ?? ''), 0, 10), $activity))) * 25) ?>%;background:#55b7c5"></span>
+                <span style="width:<?= $factorConsistencyPct ?>%;background:#55b7c5"></span>
             </div>
         </div>
         <div class="factor-item">

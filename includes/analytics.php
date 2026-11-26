@@ -419,6 +419,32 @@ function fs_get_team_full_analytics(string $teamId, ?PDO $pdo = null): ?array
     $totalTeamPendingEvents = 0;
     $totalTeamRejectedEvents = 0;
 
+    // Event valid untuk penentuan status WEI mengikuti filter fn_group_wei_summary
+    // (valid_event_count). Fallback ke v_team_contribution_summary jika baris WEI
+    // anggota tidak tersedia (mis. anggota non-mahasiswa).
+    $statusValidEventsByUser = [];
+    $totalTeamStatusValidEvents = 0;
+
+    // LOOP 1: akumulasi total tim terlebih dahulu (sebelum status anggota ditentukan).
+    foreach ($contribRows as $c) {
+        $uid = strtolower((string) $c['user_id']);
+        $weiData = $weiByUser[$uid] ?? null;
+
+        $totalTeamEvents += (int) ($c['total_events'] ?? 0);
+        $totalTeamRawDelta += (float) ($c['total_raw_delta'] ?? 0.0);
+        $totalTeamFilteredDelta += (float) ($c['total_filtered_delta'] ?? 0.0);
+        $totalTeamValidEvents += (int) ($c['valid_events'] ?? 0);
+        $totalTeamPendingEvents += (int) ($c['pending_events'] ?? 0);
+        $totalTeamRejectedEvents += (int) ($c['rejected_events'] ?? 0);
+
+        $statusValid = $weiData !== null
+            ? (int) ($weiData['valid_event_count'] ?? 0)
+            : (int) ($c['valid_events'] ?? 0);
+        $statusValidEventsByUser[$uid] = $statusValid;
+        $totalTeamStatusValidEvents += $statusValid;
+    }
+
+    // LOOP 2: tentukan status setiap anggota berdasarkan total tim yang sudah lengkap.
     $members = [];
     foreach ($contribRows as $c) {
         $uid = strtolower((string) $c['user_id']);
@@ -431,18 +457,11 @@ function fs_get_team_full_analytics(string $teamId, ?PDO $pdo = null): ?array
         $pendingEvents = (int) ($c['pending_events'] ?? 0);
         $rejectedEvents = (int) ($c['rejected_events'] ?? 0);
 
-        $totalTeamEvents += $totalEvents;
-        $totalTeamRawDelta += $rawDelta;
-        $totalTeamFilteredDelta += $filteredDelta;
-        $totalTeamValidEvents += $validEvents;
-        $totalTeamPendingEvents += $pendingEvents;
-        $totalTeamRejectedEvents += $rejectedEvents;
-
         // Status analitik & tampilan WEI
-        $weiPercentage = $weiData !== null ? (float) $weiData['wei_percentage'] : 0.0;
+        $weiPercentage = ($weiData !== null && $weiData['wei_percentage'] !== null) ? (float) $weiData['wei_percentage'] : 0.0;
         $dataStatus = $weiData['data_status'] ?? 'Belum Cukup Data';
 
-        $statusBadge = fs_determine_wei_status($validEvents, $totalTeamValidEvents, $dataStatus);
+        $statusBadge = fs_determine_wei_status($statusValidEventsByUser[$uid] ?? 0, $totalTeamStatusValidEvents, $dataStatus);
 
         $members[] = [
             'user_id' => (string) $c['user_id'],
@@ -486,6 +505,231 @@ function fs_get_team_full_analytics(string $teamId, ?PDO $pdo = null): ?array
         'total_rejected_events' => $totalTeamRejectedEvents,
         'has_sufficient_data' => $totalTeamValidEvents > 0,
         'members' => $members,
+    ];
+}
+
+/**
+ * Agregasi harian Contribution Trend dari telemetri tervalidasi (7 hari kalender WIB).
+ *
+ * Sumber tunggal: public.telemetry_logs. Filter validasi identik dengan CTE valid_events
+ * pada public.fn_group_wei_summary, ditambah syarat aktor adalah mahasiswa anggota kelompok
+ * (setara CTE members pada fungsi tersebut). Semua JOIN bersifat 1:1 (PK) dan syarat
+ * keanggotaan memakai EXISTS sehingga tidak menggandakan baris telemetri.
+ *
+ * activity_timestamp bertipe TIMESTAMP WITHOUT TIME ZONE dan disimpan dalam UTC oleh sinkronisasi
+ * Google, sehingga dikonversi: (ts AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Jakarta'.
+ *
+ * @param PDO $pdo
+ * @param array $groupIds UUID kelompok (team) yang boleh dilihat pengguna
+ * @param string|null $userId Jika diisi, hanya telemetri milik pengguna ini (tampilan mahasiswa)
+ * @param DateTimeImmutable|null $now Waktu acuan (untuk pengujian)
+ * @return array{days: array, total_events: int, total_filtered_delta: float, active_days: int, start_date: string, end_date: string, error: ?string}
+ */
+function fs_get_valid_contribution_trend(PDO $pdo, array $groupIds, ?string $userId = null, ?DateTimeImmutable $now = null): array
+{
+    static $indoDays = ['Sun' => 'Min', 'Mon' => 'Sen', 'Tue' => 'Sel', 'Wed' => 'Rab', 'Thu' => 'Kam', 'Fri' => 'Jum', 'Sat' => 'Sab'];
+
+    $tzJakarta = new DateTimeZone('Asia/Jakarta');
+    $now = ($now ?? new DateTimeImmutable('now'))->setTimezone($tzJakarta);
+    $todayStart = $now->setTime(0, 0, 0);
+    $rangeStart = $todayStart->modify('-6 days');
+    $rangeEndExclusive = $todayStart->modify('+1 day');
+
+    $days = [];
+    for ($d = $rangeStart; $d < $rangeEndExclusive; $d = $d->modify('+1 day')) {
+        $key = $d->format('Y-m-d');
+        $days[$key] = [
+            'date' => $key,
+            'label' => $indoDays[$d->format('D')] ?? $d->format('D'),
+            'sum' => 0.0,
+            'count' => 0,
+        ];
+    }
+
+    $result = [
+        'days' => $days,
+        'total_events' => 0,
+        'total_filtered_delta' => 0.0,
+        'active_days' => 0,
+        'start_date' => $rangeStart->format('Y-m-d'),
+        'end_date' => $todayStart->format('Y-m-d'),
+        'error' => null,
+    ];
+
+    // Hanya UUID valid; normalisasi huruf kecil dan buang duplikat.
+    $cleanIds = [];
+    foreach ($groupIds as $gid) {
+        $gid = strtolower(trim((string) $gid));
+        if ($gid !== '' && valid_uuid($gid)) {
+            $cleanIds[$gid] = true;
+        }
+    }
+    $cleanIds = array_keys($cleanIds);
+
+    if ($cleanIds === []) {
+        return $result; // Tidak ada kelompok terlihat: grafik nol, bukan error.
+    }
+    if ($userId !== null && !valid_uuid($userId)) {
+        return $result;
+    }
+
+    $utc = new DateTimeZone('UTC');
+    $params = [
+        'group_ids' => '{' . implode(',', $cleanIds) . '}', // literal array PostgreSQL, di-CAST ke uuid[]
+        'start_utc' => $rangeStart->setTimezone($utc)->format('Y-m-d H:i:s'),
+        'end_utc' => $rangeEndExclusive->setTimezone($utc)->format('Y-m-d H:i:s'),
+    ];
+    $userFilter = '';
+    if ($userId !== null) {
+        $userFilter = ' AND tl.user_id = CAST(:user_id AS UUID)';
+        $params['user_id'] = $userId;
+    }
+
+    $sql = "
+        SELECT
+            ((tl.activity_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Jakarta')::date::text AS activity_date,
+            SUM(tl.filtered_delta) AS total_filtered_delta,
+            COUNT(*) AS valid_event_count
+        FROM public.telemetry_logs tl
+        JOIN public.groups g
+            ON g.id = tl.group_id
+           AND g.group_type = 'team'
+        JOIN public.tasks t
+            ON t.id = tl.task_id
+           AND t.group_id = tl.group_id
+        WHERE tl.group_id = ANY(CAST(:group_ids AS UUID[]))
+          AND tl.activity_timestamp >= CAST(:start_utc AS TIMESTAMP)
+          AND tl.activity_timestamp <  CAST(:end_utc AS TIMESTAMP)
+          AND tl.task_id IS NOT NULL
+          AND tl.user_id IS NOT NULL
+          AND tl.source IN ('gdocs', 'github')
+          AND tl.raw_delta >= 0
+          AND tl.filtered_delta > 0
+          AND LOWER(TRIM(COALESCE(tl.metadata->>'validation_status', ''))) IN ('valid', 'verified', 'terverifikasi')
+          AND COALESCE(tl.metadata->>'entry_mode', '') <> 'manual_test'
+          AND EXISTS (
+              SELECT 1
+              FROM public.group_members gm
+              JOIN public.users u ON u.id = gm.user_id
+              WHERE gm.group_id = tl.group_id
+                AND gm.user_id = tl.user_id
+                AND u.role = 'mahasiswa'
+          )
+          {$userFilter}
+        GROUP BY 1
+        ORDER BY 1
+    ";
+
+    try {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $key = (string) $row['activity_date'];
+            if (!isset($result['days'][$key])) {
+                continue;
+            }
+            $result['days'][$key]['sum'] = (float) $row['total_filtered_delta'];
+            $result['days'][$key]['count'] = (int) $row['valid_event_count'];
+        }
+    } catch (Throwable $e) {
+        error_log('FairShare contribution trend query failed: ' . $e->getMessage());
+        $result['error'] = 'Data tren kontribusi tidak dapat dimuat saat ini.';
+        return $result;
+    }
+
+    foreach ($result['days'] as $day) {
+        $result['total_events'] += $day['count'];
+        $result['total_filtered_delta'] += $day['sum'];
+        if ($day['count'] > 0) {
+            $result['active_days']++;
+        }
+    }
+
+    return $result;
+}
+
+/**
+ * Menentukan kelompok aktif mahasiswa pada dashboard dengan validasi otorisasi server-side.
+ *
+ * Aturan keamanan & persistensi:
+ * 1. Hanya kelompok yang ada di $visibleGroups (hasil visible_groups($user)) yang diizinkan.
+ * 2. Jika $pdo tersedia, juga diverifikasi ulang via fs_can_user_access_team() (defense-in-depth).
+ * 3. Permintaan ?group_id yang tidak valid / milik orang lain ditolak (rejected_request = true)
+ *    tanpa membocorkan apakah kelompok tersebut ada, lalu fallback ke pilihan sesi/kelompok pertama.
+ * 4. Pilihan sah disimpan di $session['dashboard_selected_group_id'] agar bertahan saat reload.
+ *
+ * @param array $user Data pengguna sesi login
+ * @param array $visibleGroups Daftar kelompok milik mahasiswa dari visible_groups($user)
+ * @param string|null $requestedGroupId Nilai dari $_GET['group_id'] (jika ada)
+ * @param array $session Referensi $_SESSION
+ * @param PDO|null $pdo Koneksi DB opsional untuk verifikasi tambahan
+ * @return array{group: ?array, group_id: string, rejected_request: bool}
+ */
+function fs_resolve_student_dashboard_group(
+    array $user,
+    array $visibleGroups,
+    ?string $requestedGroupId,
+    array &$session,
+    ?PDO $pdo = null
+): array {
+    $allowedById = [];
+    foreach ($visibleGroups as $g) {
+        $gid = strtolower(trim((string) ($g['id'] ?? '')));
+        if ($gid !== '' && valid_uuid($gid)) {
+            $allowedById[$gid] = $g;
+        }
+    }
+
+    $requested = strtolower(trim((string) ($requestedGroupId ?? '')));
+    $hasRequest = ($requested !== '');
+
+    if ($allowedById === []) {
+        unset($session['dashboard_selected_group_id']);
+        return [
+            'group' => null,
+            'group_id' => '',
+            'rejected_request' => $hasRequest,
+        ];
+    }
+
+    $isAuthorized = static function (string $gid) use ($allowedById, $user, $pdo): bool {
+        if (!valid_uuid($gid) || !isset($allowedById[$gid])) {
+            return false;
+        }
+        if ($pdo !== null && !fs_can_user_access_team($user, $gid, $pdo)) {
+            return false;
+        }
+        return true;
+    };
+
+    $rejectedRequest = false;
+    if ($hasRequest) {
+        if ($isAuthorized($requested)) {
+            $session['dashboard_selected_group_id'] = $requested;
+            return [
+                'group' => $allowedById[$requested],
+                'group_id' => $requested,
+                'rejected_request' => false,
+            ];
+        }
+        $rejectedRequest = true;
+    }
+
+    $savedId = strtolower(trim((string) ($session['dashboard_selected_group_id'] ?? '')));
+    if ($savedId !== '' && $isAuthorized($savedId)) {
+        return [
+            'group' => $allowedById[$savedId],
+            'group_id' => $savedId,
+            'rejected_request' => $rejectedRequest,
+        ];
+    }
+
+    $firstId = array_key_first($allowedById);
+    $session['dashboard_selected_group_id'] = $firstId;
+    return [
+        'group' => $allowedById[$firstId],
+        'group_id' => $firstId,
+        'rejected_request' => $rejectedRequest,
     ];
 }
 
