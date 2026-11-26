@@ -90,112 +90,62 @@ if ($teacher) {
 }
 
 // ==============================================================
-// PENGOLAHAN GRAFIK DINAMIS (TELEMETRI + ACTIVITY.JSON LOKAL) – UPDATED
+// PENGOLAHAN GRAFIK DINAMIS (TELEMETRI + ACTIVITY.JSON LOKAL)
 // ==============================================================
 $indoDays = ['Sun' => 'Min', 'Mon' => 'Sen', 'Tue' => 'Sel', 'Wed' => 'Rab', 'Thu' => 'Kam', 'Fri' => 'Jum', 'Sat' => 'Sab'];
 $chartDays = [];
 
-// Build date range for 7 calendar days (today + 6 previous) in Asia/Jakarta timezone
-$tzJakarta = new DateTimeZone('Asia/Jakarta');
-$todayJakarta = new DateTime('now', $tzJakarta);
-$todayJakarta->setTime(0, 0, 0); // start of today (midnight WIB)
-$startJakarta = (clone $todayJakarta)->modify('-6 days');
-
-$period = new DatePeriod($startJakarta, new DateInterval('P1D'), (clone $todayJakarta)->modify('+1 day'));
-foreach ($period as $dt) {
-    $key = $dt->format('Y-m-d');
-    $engDay = $dt->format('D');
-    $chartDays[$key] = [
+for ($i = 6; $i >= 0; $i--) {
+    $ts = strtotime("-$i days");
+    $dKey = date('Y-m-d', $ts);
+    $engDay = date('D', $ts);
+    $chartDays[$dKey] = [
         'label' => $indoDays[$engDay] ?? $engDay,
-        'sum'   => 0.0,
-        'count' => 0,
+        'count' => 0
     ];
 }
 
-// Prepare SQL query to aggregate telemetry per day with required filters
-$sql = "SELECT
-    (tl.activity_timestamp AT TIME ZONE 'UTC'
-        AT TIME ZONE 'Asia/Jakarta')::date AS activity_date,
-    SUM(tl.filtered_delta) AS total_filtered_delta,
-    COUNT(*) AS valid_event_count
-FROM public.telemetry_logs tl
-JOIN public.tasks t
-    ON t.id = tl.task_id
-   AND t.group_id = tl.group_id
-WHERE tl.task_id IS NOT NULL
-  AND tl.user_id IS NOT NULL
-  AND tl.source IN ('gdocs', 'github')
-  AND tl.raw_delta >= 0
-  AND tl.filtered_delta > 0
-  AND LOWER(TRIM(COALESCE(
-      tl.metadata->>'validation_status', ''
-  ))) IN ('valid', 'verified', 'terverifikasi')
-  AND COALESCE(
-      tl.metadata->>'entry_mode', ''
-  ) <> 'manual_test'
-  AND (tl.activity_timestamp AT TIME ZONE 'UTC'
-       AT TIME ZONE 'Asia/Jakarta')::date
-      BETWEEN :start_date AND :end_date
-  AND tl.group_id = ANY(CAST(:group_ids AS uuid[]))
-GROUP BY activity_date
-ORDER BY activity_date";
-
-// Convert PHP UUID array into PostgreSQL UUID array literal.
-$groupIds = array_values($groupIds);
-
-if (empty($groupIds)) {
-    throw new RuntimeException('No group IDs available for contribution chart.');
-}
-
-foreach ($groupIds as $groupId) {
-    if (
-        !is_string($groupId) ||
-        !preg_match(
-            '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
-            $groupId
-        )
-    ) {
-        throw new RuntimeException('Invalid group UUID.');
+foreach ($mine as $l) {
+    $rawDate = $l['date'] ?? $l['created_at'] ?? $l['activity_timestamp'] ?? '';
+    if (!empty($rawDate)) {
+        $pDate = date('Y-m-d', strtotime((string)$rawDate));
+        if (isset($chartDays[$pDate])) {
+            $chartDays[$pDate]['count']++;
+        }
     }
 }
 
-$groupIdsParam = '{' . implode(',', $groupIds) . '}';
-
-$stmt = $pdo->prepare($sql);
-
-$stmt->execute([
-    ':start_date' => $startJakarta->format('Y-m-d'),
-    ':end_date'   => $todayJakarta->format('Y-m-d'),
-    ':group_ids'  => $groupIdsParam,
-]);
-
-while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $dateKey = $row['activity_date'];
-
-    if (isset($chartDays[$dateKey])) {
-        $chartDays[$dateKey]['sum'] = (float) $row['total_filtered_delta'];
-        $chartDays[$dateKey]['count'] = (int) $row['valid_event_count'];
+foreach ($activity as $act) {
+    $rawTime = $act['time'] ?? $act['timestamp'] ?? $act['date'] ?? '';
+    if (!empty($rawTime)) {
+        $pDate = date('Y-m-d', strtotime((string)$rawTime));
+        if (isset($chartDays[$pDate])) {
+            $chartDays[$pDate]['count']++;
+        }
     }
 }
 
-while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $dateKey = $row['activity_date'];
-    if (isset($chartDays[$dateKey])) {
-        $chartDays[$dateKey]['sum']   = (float) $row['total_filtered_delta'];
-        $chartDays[$dateKey]['count'] = (int) $row['valid_event_count'];
+foreach ($tasks as $t) {
+    $rawDate = $t['created_at'] ?? $t['updated_at'] ?? '';
+    if (!empty($rawDate)) {
+        $pDate = date('Y-m-d', strtotime((string)$rawDate));
+        if (isset($chartDays[$pDate])) {
+            $chartDays[$pDate]['count']++;
+        }
     }
 }
 
 $dayValues = array_values($chartDays);
 $totalPoints = count($dayValues);
-$maxSum = max(array_column($dayValues, 'sum'));
-$upperBound = max(4, $maxSum);
+$maxCount = count($dayValues) > 0 ? max(array_column($dayValues, 'count')) : 0;
+$upperBound = max(4, $maxCount);
 
 $points = [];
 $stepX = 640 / max(1, ($totalPoints - 1));
+
 foreach ($dayValues as $idx => $d) {
     $x = round($idx * $stepX, 1);
-    $y = round(155 - (($d['sum'] / $upperBound) * 130), 1);
+    $y = round(155 - (($d['count'] / $upperBound) * 130), 1);
     $points[] = ['x' => $x, 'y' => $y];
 }
 
@@ -344,7 +294,22 @@ page_heading(
     $quickActionHtml
 );
 
-echo '<section class="welcome-banner"><div><span class="banner-overline">FAIRSHARE INSIGHT</span><h2>Kolaborasi yang baik dimulai dari transparansi.</h2><p>Semua progres penting tim dalam satu workspace.</p></div><div class="banner-art"><div class="art-ring ring-a"></div><div class="art-ring ring-b"></div><div class="art-core art-logo"><img src="assets/fairshare-logo.svg" alt="Logo FairShare"></div><div class="art-tag">LIVE WORKSPACE</div></div></section>';
+// BANNER DASHBOARD: LOGO DI TENGAH RING A & B, LIVE WORKSPACE STABIL DI BAWAH DENGAN JARAK AMAN
+echo '<section class="welcome-banner">
+    <div>
+        <span class="banner-overline">FAIRSHARE INSIGHT</span>
+        <h2>Kolaborasi yang baik dimulai dari transparansi.</h2>
+        <p>Semua progres penting tim dalam satu workspace.</p>
+    </div>
+    <div class="banner-art" style="position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%;">
+        <div class="art-ring ring-a" style="position: absolute; top: calc(50% - 10px); left: 50%; transform: translate(-50%, -50%) scale(1.15);"></div>
+        <div class="art-ring ring-b" style="position: absolute; top: calc(50% - 10px); left: 50%; transform: translate(-50%, -50%) scale(1.15);"></div>
+        <div class="art-core art-logo" style="position: relative; top: -6px; right: 0; margin-bottom: 24px;">
+            <img src="assets/fairshare-logo.svg" alt="Logo FairShare">
+        </div>
+        <div class="art-tag" style="position: relative; bottom: 0; right: 0; margin-top: 14px;">LIVE WORKSPACE</div>
+    </div>
+</section>';
 ?>
 
 <!-- KARTU STATISTIK UTAMA DASHBOARD -->
@@ -498,6 +463,7 @@ echo '<section class="welcome-banner"><div><span class="banner-overline">FAIRSHA
         <div class="chart-note"><?= $maxCount > 0 ? 'Data diperbarui otomatis dari log aktivitas workspace kamu.' : 'Belum ada aktivitas tercatat dalam 7 hari terakhir.' ?></div>
     </section>
 
+    <!-- FAKTOR WEI -->
     <section class="panel factor-panel">
         <div class="panel-heading">
             <div>
@@ -509,14 +475,14 @@ echo '<section class="welcome-banner"><div><span class="banner-overline">FAIRSHA
         <div class="factor-item">
             <div class="factor-head">
                 <span>Volume aktivitas</span>
-                <b><?= min(100, count($activity) * 20) ?>%</b>
+                <b style="color: #ffffff !important;"><?= min(100, count($activity) * 20) ?>%</b>
             </div>
             <div class="factor-track"><span style="width:<?= min(100, count($activity) * 20) ?>%"></span></div>
         </div>
         <div class="factor-item">
             <div class="factor-head">
                 <span>Konsistensi temporal</span>
-                <b><?= min(100, count(array_unique(array_map(fn($a) => substr((string)($a['time'] ?? ''), 0, 10), $activity))) * 25) ?>%</b>
+                <b style="color: #ffffff !important;"><?= min(100, count(array_unique(array_map(fn($a) => substr((string)($a['time'] ?? ''), 0, 10), $activity))) * 25) ?>%</b>
             </div>
             <div class="factor-track">
                 <span style="width:<?= min(100, count(array_unique(array_map(fn($a) => substr((string)($a['time'] ?? ''), 0, 10), $activity))) * 25) ?>%;background:#55b7c5"></span>
@@ -525,20 +491,20 @@ echo '<section class="welcome-banner"><div><span class="banner-overline">FAIRSHA
         <div class="factor-item">
             <div class="factor-head">
                 <span>Tugas terselesaikan</span>
-                <b><?= $teacher ? number_format($classCompletion, 0) : number_format($teamProgressPct, 0) ?>%</b>
+                <b style="color: #ffffff !important;"><?= $teacher ? number_format($classCompletion, 0) : number_format($teamProgressPct, 0) ?>%</b>
             </div>
             <div class="factor-track">
                 <span style="width:<?= $teacher ? min(100, $classCompletion) : min(100, $teamProgressPct) ?>%;background:#e8ac54"></span>
             </div>
         </div>
-        <div class="factor-callout">
-            <span>✦</span>
-            <p>Indikator WEI mencerminkan proporsi kontribusi aktivitas kolaboratif yang berhasil dikumpulkan dan divalidasi FairShare terhadap tugas berbobot kelompok, bukan evaluasi kualitas akademik otomatis.</p>
+        <div class="factor-callout" style="background: rgba(120, 104, 255, 0.12) !important; border: 1px solid rgba(120, 104, 255, 0.3);">
+            <span style="color: #a29bfe !important;">✦</span>
+            <p style="color: #e2e8f0 !important;">Indikator WEI mencerminkan proporsi kontribusi aktivitas kolaboratif yang berhasil dikumpulkan dan divalidasi FairShare terhadap tugas berbobot kelompok, bukan evaluasi kualitas akademik otomatis.</p>
         </div>
     </section>
 </div>
 
-<!-- LOWER GRID: DAFTAR KELOMPOK / TUGAS & AKTIVITAS -->
+<!-- LOWER GRID: TUGAS YANG PERLU DIPERHATIKAN -->
 <div class="content-grid lower-grid">
     <?php if ($teacher): ?>
         <section class="panel">
@@ -627,11 +593,11 @@ echo '<section class="welcome-banner"><div><span class="banner-overline">FAIRSHA
                         <div class="task-line">
                             <span class="task-square"><?= ($t['status'] ?? '') === 'Selesai' ? '✓' : '↗' ?></span>
                             <div class="task-info">
-                                <b><?= e($t['title']) ?></b>
-                                <small><?= e($t['group_name'] ?? 'Kelompok') ?> · Tenggat <?= e($t['due_date'] ?? 'Belum ditentukan') ?></small>
+                                <b style="color: #ffffff !important;"><?= e($t['title']) ?></b>
+                                <small style="color: #94a3b8 !important;"><?= e($t['group_name'] ?? 'Kelompok') ?> · Tenggat <?= e($t['due_date'] ?? 'Belum ditentukan') ?></small>
                             </div>
-                            <span class="task-state"><?= e($t['status']) ?></span>
-                            <div class="task-percent"><?= $pct ?>%</div>
+                            <span class="task-state" style="background: rgba(255, 255, 255, 0.08) !important; color: #cbd5e1 !important; border: 1px solid rgba(255, 255, 255, 0.12); padding: 4px 10px; border-radius: 20px; font-size: 11px;"><?= e($t['status']) ?></span>
+                            <div class="task-percent" style="color: #a29bfe !important; font-weight: bold;"><?= $pct ?>%</div>
                         </div>
                     <?php endforeach; ?>
                 </div>
