@@ -488,19 +488,36 @@ function fs_google_verify_document(string $accessToken, string $fileId): array
     return $file;
 }
 
-function fs_google_query_activity(string $accessToken, string $fileId, string $since): array
+/**
+ * Build the Google Drive Activity query request payload.
+ *
+ * For initial sync ($since is null or empty):
+ * - Omits 'filter' property completely so the entire document history is fetched.
+ * For incremental sync ($since is provided):
+ * - Includes 'filter' with time >= ($since - 120 seconds) for safe overlap.
+ */
+function fs_google_build_activity_request(string $fileId, ?string $since = null): array
 {
-    $timestamp = strtotime($since . ' UTC');
-    if (!$timestamp) {
-        $timestamp = time() - 86400;
-    }
-    $filterTime = gmdate('Y-m-d\TH:i:s\Z', max(0, $timestamp - 120));
     $request = [
         'itemName' => 'items/' . $fileId,
         'pageSize' => 100,
-        'filter' => 'time >= "' . $filterTime . '"',
         'consolidationStrategy' => ['none' => new stdClass()],
     ];
+
+    if ($since !== null && trim($since) !== '') {
+        $timestamp = strtotime($since . ' UTC');
+        if ($timestamp) {
+            $filterTime = gmdate('Y-m-d\TH:i:s\Z', max(0, $timestamp - 120));
+            $request['filter'] = 'time >= "' . $filterTime . '"';
+        }
+    }
+
+    return $request;
+}
+
+function fs_google_query_activity(string $accessToken, string $fileId, ?string $since = null): array
+{
+    $request = fs_google_build_activity_request($fileId, $since);
     $all = [];
     $pageCount = 0;
     do {
@@ -613,6 +630,83 @@ function fs_google_event_external_id(
 }
 
 /**
+ * Filter and extract valid contribution actions from a Google DriveActivity item.
+ *
+ * Requirements:
+ * 1. Evaluates primaryActionDetail first; only 'create' and 'edit' are accepted as primary candidate types.
+ * 2. Rejects metadata operations (rename, permissionChange, move, delete, restore, comment, etc.).
+ * 3. Inspects actions[], ensuring only actions matching the primary type are processed (e.g. ignores secondary 'edit' on rename/share).
+ * 4. Resolves actor strictly: prioritizes individual action actor, and falls back to parent actors ONLY when unambiguous (count === 1).
+ * 5. Resolves action-specific timestamp and target with parent fallbacks.
+ */
+function fs_google_filter_activity_actions(array $activity): array
+{
+    $primaryDetail = is_array($activity['primaryActionDetail'] ?? null)
+        ? $activity['primaryActionDetail']
+        : [];
+    $primaryType = (string) array_key_first($primaryDetail);
+
+    // 1 & 2. Only allow primaryType 'create' and 'edit'
+    if (!in_array($primaryType, ['create', 'edit'], true)) {
+        return [];
+    }
+
+    $activityActors = is_array($activity['actors'] ?? null) ? $activity['actors'] : [];
+    $activityTargets = is_array($activity['targets'] ?? null) ? $activity['targets'] : [];
+    $actions = is_array($activity['actions'] ?? null) ? $activity['actions'] : [];
+    if (!$actions) {
+        $actions = [[
+            'detail' => $primaryDetail,
+            'timestamp' => $activity['timestamp'] ?? ($activity['timeRange']['endTime'] ?? null),
+        ]];
+    }
+
+    $candidates = [];
+    foreach ($actions as $actionIndex => $action) {
+        $detail = is_array($action['detail'] ?? null) ? $action['detail'] : $primaryDetail;
+        $actionType = (string) array_key_first($detail);
+
+        // 3. Only process action whose type matches the primary activity type
+        if ($actionType !== $primaryType) {
+            continue;
+        }
+
+        // 4. Prioritize individual action actor; fallback to parent only if unambiguous (count === 1)
+        $actor = $action['actor'] ?? (count($activityActors) === 1 ? $activityActors[0] : null);
+        $knownUser = is_array($actor) ? ($actor['user']['knownUser'] ?? null) : null;
+        $isCurrentUser = is_array($knownUser) && ($knownUser['isCurrentUser'] ?? false) === true;
+
+        $activityTime = fs_google_time_from_activity($action);
+        if (!$activityTime) {
+            $activityTime = fs_google_time_from_activity($activity);
+        }
+        if (!$activityTime) {
+            continue;
+        }
+
+        $target = $action['target'] ?? (count($activityTargets) === 1 ? $activityTargets[0] : []);
+        $targetTitle = (string) ($target['driveItem']['title'] ?? 'Google Docs');
+        $personName = (string) ($knownUser['personName'] ?? '');
+
+        $candidates[] = [
+            'action_index' => (int) $actionIndex,
+            'action' => $action,
+            'action_type' => $actionType,
+            'primary_type' => $primaryType,
+            'actor' => $actor,
+            'known_user' => $knownUser,
+            'is_current_user' => $isCurrentUser,
+            'person_name' => $personName,
+            'activity_time' => $activityTime,
+            'target' => $target,
+            'target_title' => $targetTitle,
+        ];
+    }
+
+    return $candidates;
+}
+
+/**
  * Query each connected member's view of a task document. Only actions marked
  * isCurrentUser=true are attributed to that member. Events are strictly validated
  * through FairShare's 14 validation criteria (producing raw_delta=1.0 and filtered_delta=1.0 when valid).
@@ -690,43 +784,24 @@ function fs_google_sync_task(string $taskId): array
             continue;
         }
         try {
+            $syncStartedAt = gmdate('Y-m-d H:i:s');
             $accessToken = fs_google_access_token((string) $memberId);
-            $since = (string) ($state[(string) $memberId] ?? $task['created_at']);
+            $since = isset($state[(string) $memberId]) && trim((string) $state[(string) $memberId]) !== ''
+                ? (string) $state[(string) $memberId]
+                : null;
             $activities = fs_google_query_activity($accessToken, (string) $task['external_resource_id'], $since);
             foreach ($activities as $activity) {
-                $activityActors = is_array($activity['actors'] ?? null) ? $activity['actors'] : [];
-                $activityTargets = is_array($activity['targets'] ?? null) ? $activity['targets'] : [];
-                $actions = $activity['actions'] ?? [];
-                if (!$actions) {
-                    $actions = [[
-                        'detail' => $activity['primaryActionDetail'] ?? [],
-                        'timestamp' => $activity['timestamp'] ?? ($activity['timeRange']['endTime'] ?? null),
-                    ]];
-                }
-                foreach ($actions as $actionIndex => $action) {
-                    // Action may omit actor when it is inherited from DriveActivity.
-                    // Only inherit when there is exactly one parent actor; never guess
-                    // from the first element of a multi-actor activity.
-                    $actor = $action['actor'] ?? (count($activityActors) === 1 ? $activityActors[0] : null);
-                    $knownUser = is_array($actor) ? ($actor['user']['knownUser'] ?? null) : null;
-                    if (!is_array($knownUser) || ($knownUser['isCurrentUser'] ?? false) !== true) {
+                $candidates = fs_google_filter_activity_actions($activity);
+                foreach ($candidates as $candidate) {
+                    if (!$candidate['is_current_user']) {
                         continue;
                     }
-                    $detail = $action['detail'] ?? ($activity['primaryActionDetail'] ?? []);
-                    $actionType = is_array($detail) ? (string) array_key_first($detail) : '';
-                    if (!in_array($actionType, ['edit', 'create'], true)) {
-                        continue;
-                    }
-                    $activityTime = fs_google_time_from_activity($action);
-                    if (!$activityTime) {
-                        $activityTime = fs_google_time_from_activity($activity);
-                    }
-                    if (!$activityTime) {
-                        continue;
-                    }
-                    $target = $action['target'] ?? (count($activityTargets) === 1 ? $activityTargets[0] : []);
-                    $targetTitle = (string) ($target['driveItem']['title'] ?? 'Google Docs');
-                    $personName = (string) ($knownUser['personName'] ?? '');
+                    $actionIndex = $candidate['action_index'];
+                    $action = $candidate['action'];
+                    $actionType = $candidate['action_type'];
+                    $activityTime = $candidate['activity_time'];
+                    $targetTitle = $candidate['target_title'];
+                    $personName = $candidate['person_name'];
                     // Include DriveActivity parent context. Action frequently omits
                     // inherited actor/target/timestamp fields, so Action-only hashes
                     // would collapse separate edits with identical detail payloads.
@@ -781,10 +856,10 @@ function fs_google_sync_task(string $taskId): array
                             CAST(:task_id AS UUID), CAST(:group_id AS UUID), CAST(:user_id AS UUID),
                             'gdocs', :external_id, :activity_timestamp,
                             :raw_delta, :filtered_delta, CAST(:metadata AS JSONB), CURRENT_TIMESTAMP
-                        ) ON CONFLICT (task_id, source, external_id) DO UPDATE SET
-                            raw_delta = EXCLUDED.raw_delta,
-                            filtered_delta = EXCLUDED.filtered_delta,
-                            metadata = EXCLUDED.metadata
+                        ) ON CONFLICT (task_id, source, external_id)
+                        WHERE task_id IS NOT NULL
+                          AND external_id IS NOT NULL
+                        DO NOTHING
                     ");
                     $insert->execute([
                         'task_id' => $taskId,
@@ -799,7 +874,8 @@ function fs_google_sync_task(string $taskId): array
                     $inserted += $insert->rowCount();
                 }
             }
-            $state[(string) $memberId] = gmdate('Y-m-d H:i:s');
+            // Advance cursor only after all pagination and activity processing succeed for this member
+            $state[(string) $memberId] = $syncStartedAt;
             $checkedAccounts++;
         } catch (Throwable $e) {
             $skippedAccounts++;
