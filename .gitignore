@@ -6,3 +6,7 @@
 /config/.env
 /config/.env.*
 !/config/.env.example
+
+# Local runtime activity logs
+/data/activity.json
+/storage/logs/activity.json
