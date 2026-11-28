@@ -28,11 +28,130 @@ $mine = $teacher
     : all_telemetry($userId);
 
 $verifiedCount = count(array_filter($mine, fn($l) => ($l['status'] ?? '') === 'Terverifikasi' || ($l['validation_status'] ?? '') === 'valid'));
-$activity = read_data('activity.json', []);
-if (!$teacher) {
-    $activity = array_values(array_filter($activity, fn($l) => ($l['user'] ?? '') === ($user['name'] ?? '')));
+
+// ==============================================================
+// AKTIVITAS TERBARU: Diambil dari telemetry_logs (Supabase)
+// - Dosen  : telemetri dari SEMUA kelompok yang terlihat (access-scoped).
+// - Mahasiswa: hanya telemetri milik user pada kelompok terpilih.
+// - Fallback ke activity.json hanya jika koneksi DB gagal.
+// ==============================================================
+$recent = [];
+$recentDbError = false;
+try {
+    if ($teacher) {
+        // Dosen: ambil aktivitas telemetri dari kelompok yang terpantau
+        if (!empty($groupIds)) {
+            $pgGroupIds = '{' . implode(',', array_map('strtolower', $groupIds)) . '}';
+            $recentStmt = $pdo->prepare("
+                SELECT
+                    tl.id::text AS id,
+                    u.name AS actor_name,
+                    COALESCE(
+                        NULLIF(tl.metadata->>'event_type', ''),
+                        CASE
+                            WHEN tl.source = 'gdocs' THEN 'Edit Google Docs'
+                            WHEN tl.source = 'github' THEN 'Aktivitas GitHub'
+                            ELSE 'Aktivitas Telemetri'
+                        END
+                    ) AS activity_title,
+                    t.title AS task_title,
+                    g.name AS group_name,
+                    tl.source,
+                    LOWER(TRIM(COALESCE(tl.metadata->>'validation_status', ''))) AS val_status,
+                    (tl.activity_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Jakarta' AS activity_wib
+                FROM public.telemetry_logs tl
+                LEFT JOIN public.users u ON u.id = tl.user_id
+                LEFT JOIN public.tasks t ON t.id = tl.task_id
+                JOIN public.groups g ON g.id = tl.group_id AND g.group_type = 'team'
+                WHERE tl.group_id = ANY(CAST(:group_ids AS UUID[]))
+                ORDER BY tl.activity_timestamp DESC
+                LIMIT 5
+            ");
+            $recentStmt->execute(['group_ids' => $pgGroupIds]);
+            $recentRows = $recentStmt->fetchAll(PDO::FETCH_ASSOC);
+        } else {
+            $recentRows = [];
+        }
+    } else {
+        // Mahasiswa: hanya telemetri milik dirinya pada kelompok yang terlihat
+        $visibleGroupIds = array_map('strtolower', array_column($groups, 'id'));
+        if (!empty($visibleGroupIds)) {
+            $pgGroupIdsMhs = '{' . implode(',', $visibleGroupIds) . '}';
+            $recentStmt = $pdo->prepare("
+                SELECT
+                    tl.id::text AS id,
+                    u.name AS actor_name,
+                    COALESCE(
+                        NULLIF(tl.metadata->>'event_type', ''),
+                        CASE
+                            WHEN tl.source = 'gdocs' THEN 'Edit Google Docs'
+                            WHEN tl.source = 'github' THEN 'Aktivitas GitHub'
+                            ELSE 'Aktivitas Telemetri'
+                        END
+                    ) AS activity_title,
+                    t.title AS task_title,
+                    g.name AS group_name,
+                    tl.source,
+                    LOWER(TRIM(COALESCE(tl.metadata->>'validation_status', ''))) AS val_status,
+                    (tl.activity_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Jakarta' AS activity_wib
+                FROM public.telemetry_logs tl
+                LEFT JOIN public.users u ON u.id = tl.user_id
+                LEFT JOIN public.tasks t ON t.id = tl.task_id
+                JOIN public.groups g ON g.id = tl.group_id AND g.group_type = 'team'
+                WHERE tl.user_id = CAST(:user_id AS UUID)
+                  AND tl.group_id = ANY(CAST(:group_ids AS UUID[]))
+                ORDER BY tl.activity_timestamp DESC
+                LIMIT 5
+            ");
+            $recentStmt->execute([
+                'user_id'   => $userId,
+                'group_ids' => $pgGroupIdsMhs,
+            ]);
+            $recentRows = $recentStmt->fetchAll(PDO::FETCH_ASSOC);
+        } else {
+            $recentRows = [];
+        }
+    }
+
+    // Normalisasi baris telemetri ke format yang dipakai template HTML
+    foreach ($recentRows as $row) {
+        $valStatus = (string) ($row['val_status'] ?? '');
+        $dotType = match (true) {
+            in_array($valStatus, ['valid', 'terverifikasi', 'verified'], true) => 'success',
+            $valStatus === 'rejected' => 'danger',
+            $valStatus === 'duplicate' => 'warning',
+            default => 'info',
+        };
+        $sourceLabel = match ((string) ($row['source'] ?? '')) {
+            'gdocs'  => 'Google Docs',
+            'github' => 'GitHub',
+            default  => 'Telemetri',
+        };
+        $taskLabel = !empty($row['task_title']) ? ' · Tugas: ' . $row['task_title'] : '';
+        $groupLabel = !empty($row['group_name']) ? ' · ' . $row['group_name'] : '';
+        $timeFormatted = !empty($row['activity_wib'])
+            ? date('d M Y H:i', strtotime((string) $row['activity_wib'])) . ' WIB'
+            : '—';
+
+        $recent[] = [
+            'id'     => (string) ($row['id'] ?? ''),
+            'title'  => (string) ($row['activity_title'] ?? 'Aktivitas'),
+            'detail' => $sourceLabel . $taskLabel . $groupLabel,
+            'type'   => $dotType,
+            'time'   => $timeFormatted,
+            'user'   => (string) ($row['actor_name'] ?? 'Tidak diketahui'),
+        ];
+    }
+} catch (Throwable $recentException) {
+    error_log('FairShare dashboard recent activity DB error: ' . $recentException->getMessage());
+    $recentDbError = true;
+    // Fallback ke activity.json dengan access control berbasis nama pengguna
+    $jsonActivity = read_data('activity.json', []);
+    if (!$teacher) {
+        $jsonActivity = array_values(array_filter($jsonActivity, fn($l) => ($l['user'] ?? '') === ($user['name'] ?? '')));
+    }
+    $recent = array_slice($jsonActivity, 0, 5);
 }
-$recent = array_slice($activity, 0, 5);
 
 // ==============================================================
 // METRIK ANALITIK DARI DATABASE (VIEWS & FUNCTIONS)
@@ -666,10 +785,29 @@ echo '<section class="welcome-banner">
                     <a class="btn primary" href="tasks.php#new-task">Buat tugas pertama</a>
                 </div>
             <?php else: ?>
+                <?php
+                    // Prioritaskan tugas yang belum selesai (todo/in_progress/review),
+                    // lalu urutkan berdasarkan target_week (paling awal dulu).
+                    $priorityOrder = ['todo' => 0, 'in_progress' => 1, 'review' => 2, 'done' => 3];
+                    $sortedTasks = $tasks;
+                    usort($sortedTasks, function (array $a, array $b) use ($priorityOrder): int {
+                        $pa = $priorityOrder[$a['status_db'] ?? 'todo'] ?? 0;
+                        $pb = $priorityOrder[$b['status_db'] ?? 'todo'] ?? 0;
+                        if ($pa !== $pb) {
+                            return $pa <=> $pb;
+                        }
+                        return (int) ($a['target_week'] ?? 0) <=> (int) ($b['target_week'] ?? 0);
+                    });
+                ?>
                 <div class="task-list">
-                    <?php foreach (array_slice($tasks, 0, 5) as $t): ?>
+                    <?php foreach (array_slice($sortedTasks, 0, 5) as $t): ?>
                         <?php
-                            $pct = ($t['status'] ?? '') === 'Selesai' ? 100 : (($t['status'] ?? '') === 'Dikerjakan' ? 55 : 10);
+                            $pct = match ($t['status_db'] ?? 'todo') {
+                                'done'        => 100,
+                                'review'      => 75,
+                                'in_progress' => 50,
+                                default       => 10,
+                            };
                         ?>
                         <div class="task-line">
                             <span class="task-square"><?= ($t['status'] ?? '') === 'Selesai' ? '✓' : '↗' ?></span>
@@ -695,6 +833,11 @@ echo '<section class="welcome-banner">
             <a class="text-link" href="audit.php">Buka audit ↗</a>
         </div>
 
+        <?php if ($recentDbError): ?>
+            <div class="alert warning" role="alert" style="margin:12px 0 4px;">
+                Data aktivitas tidak dapat dimuat dari database. Menampilkan log lokal sebagai cadangan.
+            </div>
+        <?php endif; ?>
         <?php if (!$recent): ?>
             <div class="empty-state compact">
                 <span class="empty-illustration">⌁</span>

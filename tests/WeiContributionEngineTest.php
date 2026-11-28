@@ -156,7 +156,7 @@ $totalWei = $mRes['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']['wei_percent']
     + $mRes['cccccccc-cccc-4ccc-8ccc-cccccccccccc']['wei_percent']
     + $mRes['dddddddd-dddd-4ddd-8ddd-dddddddddddd']['wei_percent'];
 
-assert_test('Total WEI seluruh anggota adalah 100%', abs($totalWei - 100.0) < 0.0001, "Total: $totalWei");
+assert_test('Total WEI seluruh anggota adalah 100% setelah pembulatan PostgreSQL', abs($totalWei - 100.0) < 0.0002, "Total: $totalWei");
 
 // ------------------------------------------------------------
 // TEST 2: Satu anggota dengan seluruh aktivitas valid = 100%
@@ -392,6 +392,50 @@ assert_test('Data kelompok lain tidak memengaruhi skor B', abs($resIsolated['mem
 assert_test('Data kelompok lain tidak memengaruhi skor C', abs($resIsolated['members']['cccccccc-cccc-4ccc-8ccc-cccccccccccc']['wei_percent'] - $expectedC) < 0.0001);
 assert_test('Data kelompok lain tidak memengaruhi skor D', abs($resIsolated['members']['dddddddd-dddd-4ddd-8ddd-dddddddddddd']['wei_percent'] - $expectedD) < 0.0001);
 assert_test('User asing tidak masuk ke daftar anggota kelompok', !isset($resIsolated['members']['99999999-9999-4999-8999-999999999999']));
+
+// ------------------------------------------------------------
+// TEST 9: Canonical telemetry filters used by PHP fallback
+// ------------------------------------------------------------
+echo "\n--- TEST 9: Canonical Telemetry Eligibility ---\n";
+$baseEvent = [
+    'user_id' => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    'task_id' => 't1111111-1111-4111-8111-111111111111',
+    'group_id' => $group['id'],
+    'source' => 'gdocs', 'raw_delta' => 1.0, 'filtered_delta' => 1.0,
+    'metadata' => ['validation_status' => 'valid'],
+];
+$eligibleScore = static function (array $event) use ($group, $members, $tasks): float {
+    $result = fs_compute_wei_from_dataset($group, $members, [$tasks[0]], [$event]);
+    return (float) ($result['members']['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']['wei_percent'] ?? 0.0);
+};
+assert_test('Google Docs valid event counted', $eligibleScore($baseEvent) === 100.0);
+$githubEvent = $baseEvent; $githubEvent['source'] = 'github';
+assert_test('GitHub valid event counted', $eligibleScore($githubEvent) === 100.0);
+$bad = $baseEvent; $bad['source'] = 'other';
+assert_test('Unknown source excluded', $eligibleScore($bad) === 0.0);
+$verified = $baseEvent; $verified['metadata']['validation_status'] = 'verified';
+assert_test('verified status accepted', $eligibleScore($verified) === 100.0);
+$invalid = $baseEvent; $invalid['metadata']['validation_status'] = 'invalid';
+assert_test('Invalid status excluded', $eligibleScore($invalid) === 0.0);
+$manual = $baseEvent; $manual['metadata']['entry_mode'] = 'manual_test';
+assert_test('manual_test excluded', $eligibleScore($manual) === 0.0);
+$zeroDelta = $baseEvent; $zeroDelta['filtered_delta'] = 0.0;
+assert_test('Zero filtered delta excluded', $eligibleScore($zeroDelta) === 0.0);
+$negativeRaw = $baseEvent; $negativeRaw['raw_delta'] = -1.0;
+assert_test('Negative raw delta excluded', $eligibleScore($negativeRaw) === 0.0);
+$nonMember = $baseEvent; $nonMember['user_id'] = '99999999-9999-4999-8999-999999999999';
+assert_test('Non-member user excluded', $eligibleScore($nonMember) === 0.0);
+$wrongTask = $baseEvent; $wrongTask['task_id'] = '99999999-9999-4999-8999-999999999998';
+assert_test('Task from another group excluded', $eligibleScore($wrongTask) === 0.0);
+$inactive = fs_compute_wei_from_dataset($group, $members, [$tasks[0]], []);
+assert_test('Member without valid activity remains with zero WEI', isset($inactive['members']['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']) && $inactive['members']['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']['wei_percent'] === null);
+$roundingTelemetry = $baseEvent;
+$roundingTelemetry['filtered_delta'] = 1.0;
+$roundingTelemetry2 = $roundingTelemetry;
+$roundingTelemetry2['user_id'] = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+$roundingTelemetry2['filtered_delta'] = 2.0;
+$roundingResult = fs_compute_wei_from_dataset($group, $members, [$tasks[0]], [$roundingTelemetry, $roundingTelemetry2]);
+assert_test('WEI output rounded to PostgreSQL four decimals', $roundingResult['members']['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']['wei_percent'] === 33.3333);
 
 echo "\n============================================================\n";
 echo "SUMMARY: Passed: $testsPassed, Failed: $testsFailed\n";

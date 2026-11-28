@@ -146,8 +146,18 @@ function fs_calculate_group_wei(string $groupId, ?PDO $pdo = null): array
                 'tasks' => $taskDetails,
             ];
         }
-    } catch (Throwable $e) {
-        error_log('FairShare fn_group_wei_summary exception: ' . $e->getMessage());
+
+        // Empty is a valid function result (for example, no eligible student rows).
+        // Do not silently switch calculation sources in that case.
+        error_log('FairShare fn_group_wei_summary returned no rows; using empty result without PHP fallback.');
+        return fs_empty_group_wei_result($groupId, 'Belum ada anggota atau aktivitas yang memenuhi syarat.');
+    } catch (PDOException $e) {
+        // Only undefined-function (42883) is a supported fallback condition.
+        // Permission, connection, schema and data errors must remain visible.
+        if ((string) $e->getCode() !== '42883') {
+            throw $e;
+        }
+        error_log('FairShare WEI PHP fallback active: fn_group_wei_summary is unavailable (SQLSTATE 42883).');
     }
 
     // 2. Ambil seluruh anggota mahasiswa kelompok (Fallback)
@@ -162,6 +172,7 @@ function fs_calculate_group_wei(string $groupId, ?PDO $pdo = null): array
         FROM public.group_members gm
         JOIN public.users u ON u.id = gm.user_id
         WHERE gm.group_id = CAST(:group_id AS UUID)
+          AND u.role = 'mahasiswa'
         ORDER BY CASE WHEN gm.role_in_group = 'ketua' THEN 0 ELSE 1 END, u.name ASC
     ");
     $memberStmt->execute(['group_id' => $groupId]);
@@ -294,10 +305,22 @@ function fs_compute_wei_from_dataset(array $group, array $members, array $tasks,
 {
     $groupId = (string) ($group['id'] ?? '');
 
+    // Index eligible tasks and normalize UUID keys for consistent membership checks.
+    $taskIds = [];
+    foreach ($tasks as $task) {
+        if (isset($task['id'])) {
+            $taskIds[strtolower((string) $task['id'])] = true;
+        }
+    }
+
     // Inisialisasi struktur rekap per mahasiswa
     $memberStats = [];
     foreach ($members as $m) {
         $uid = (string) $m['user_id'];
+        if (isset($m['role']) && strtolower((string) $m['role']) !== 'mahasiswa') {
+            continue;
+        }
+        $uid = strtolower($uid);
         $memberStats[$uid] = [
             'user_id' => $uid,
             'name' => (string) ($m['name'] ?? ''),
@@ -364,13 +387,16 @@ function fs_compute_wei_from_dataset(array $group, array $members, array $tasks,
 
     // Kategorisasi dan agregasi setiap record telemetri
     foreach ($telemetryRows as $row) {
-        $uid = isset($row['user_id']) && $row['user_id'] !== null ? (string) $row['user_id'] : null;
+        $uid = isset($row['user_id']) && $row['user_id'] !== null ? strtolower((string) $row['user_id']) : null;
         $tid = isset($row['task_id']) && $row['task_id'] !== null ? (string) $row['task_id'] : null;
         $meta = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
         $entryMode = (string) ($meta['entry_mode'] ?? '');
         $valStatus = strtolower(trim((string) ($meta['validation_status'] ?? '')));
         $rawDelta = isset($row['raw_delta']) ? (float) $row['raw_delta'] : 1.0;
         $filteredDelta = isset($row['filtered_delta']) ? (float) $row['filtered_delta'] : 0.0;
+        $source = strtolower(trim((string) ($row['source'] ?? '')));
+        $rowGroupId = isset($row['group_id']) ? strtolower((string) $row['group_id']) : strtolower($groupId);
+        $taskKey = strtolower((string) ($tid ?? ''));
 
         // Cek manual test
         $isManualTest = ($entryMode === 'manual_test');
@@ -392,10 +418,18 @@ function fs_compute_wei_from_dataset(array $group, array $members, array $tasks,
             continue; // Manual test tidak boleh masuk ke perhitungan WEI resmi
         }
 
+        // Only records attached to a task in this group can be considered for WEI.
+        if ($rowGroupId !== strtolower($groupId) || $tid === null || !isset($taskIds[$taskKey])) {
+            continue;
+        }
+
         $memberStats[$uid]['raw_delta_total'] += $rawDelta;
 
         // Tentukan apakah event valid untuk WEI
-        $isValid = ($valStatus === 'valid' || $valStatus === 'terverifikasi') && $filteredDelta > 0.0;
+        $isValid = in_array($source, ['gdocs', 'github'], true)
+            && in_array($valStatus, ['valid', 'verified', 'terverifikasi'], true)
+            && $rawDelta >= 0.0
+            && $filteredDelta > 0.0;
 
         if ($isValid) {
             $memberStats[$uid]['valid_events_count']++;
@@ -472,7 +506,7 @@ function fs_compute_wei_from_dataset(array $group, array $members, array $tasks,
             }
 
             // Normalisasi terbobot
-            $calculatedWei = $weightedScoreSum / (float) $totalEvaluatedWeight;
+            $calculatedWei = round($weightedScoreSum / (float) $totalEvaluatedWeight, 4);
             $ms['wei_percent'] = $calculatedWei;
             $ms['wei_formatted'] = number_format($calculatedWei, 1) . '%';
             $ms['data_status'] = 'sufficient';
