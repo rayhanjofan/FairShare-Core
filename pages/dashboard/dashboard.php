@@ -533,7 +533,7 @@ echo '<section class="welcome-banner">
         <article class="stat-card">
             <div class="stat-top">
                 <span class="stat-label">WEI SCORE SAYA</span>
-                <span class="stat-icon violet">◈</span>
+                <span class="stat-icon violet">📊</span>
             </div>
             <div class="stat-number">
                 <?php if ($myWeiStatus['has_valid_data']): ?>
@@ -556,7 +556,7 @@ echo '<section class="welcome-banner">
         <article class="stat-card">
             <div class="stat-top">
                 <span class="stat-label">KELAS & KELOMPOK</span>
-                <span class="stat-icon blue">♧</span>
+                <span class="stat-icon blue">👥</span>
             </div>
             <div class="stat-number"><?= count($groups) ?><small> kelompok</small></div>
             <div class="stat-foot">
@@ -568,7 +568,7 @@ echo '<section class="welcome-banner">
         <article class="stat-card">
             <div class="stat-top">
                 <span class="stat-label">PROGRES TUGAS TIM</span>
-                <span class="stat-icon green">✓</span>
+                <span class="stat-icon green">📝</span>
             </div>
             <div class="stat-number"><?= $teamCompletedTasks ?><small> / <?= $teamTotalTasks ?></small></div>
             <div class="stat-foot">
@@ -583,7 +583,7 @@ echo '<section class="welcome-banner">
         <article class="stat-card">
             <div class="stat-top">
                 <span class="stat-label">FILTERED DELTA PRIBADI</span>
-                <span class="stat-icon orange">⌁</span>
+                <span class="stat-icon orange">⚖️</span>
             </div>
             <div class="stat-number"><?= number_format($myFilteredDelta, 2) ?></div>
             <div class="stat-foot">
